@@ -2,7 +2,7 @@
 // ONNX 模型（约 190MB）与 onnxruntime-web 运行时按 cache-first 策略钉进 Cache Storage：
 // 首次下载后二次访问秒开、离线可用。其余请求不拦截（开发时改代码即时生效）。
 const CACHE = 'seichi-models-v2';
-const APP_CACHE = 'seichi-app-v4';
+const APP_CACHE = 'seichi-app-v5';
 const APP_SHELL = [
   './', './index.html', './style.css', './app.js', './color.js', './segment.js',
   './ai-segment.js', './detect.js', './sam-segment.js', './ort-env.js', './platform.js', './canvas-util.js', './ai-worker.js',

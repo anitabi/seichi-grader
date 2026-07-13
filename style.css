@@ -286,3 +286,64 @@ button.small { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
 /* 现场取景按钮 */
 .shoot-btn { width: 100%; margin: 8px 0 0; border-color: #2f6df0; color: #9db4ff; }
 .shoot-btn:not(:disabled):active { background: #1c2740; }
+
+/* ==================== UI/UX 重构：分区 + 折叠 + 并列输入 ==================== */
+
+/* 分区标题 */
+.sec { display: flex; flex-direction: column; gap: 12px; }
+.sec-title {
+  font-size: 12px; font-weight: 600; letter-spacing: .05em; color: var(--text);
+  display: flex; align-items: center; gap: 8px; margin: 0;
+}
+.sec-title::before {
+  content: ''; width: 3px; height: 13px; border-radius: 2px;
+  background: linear-gradient(var(--accent), var(--accent-2));
+}
+
+/* 两张输入图并列 */
+.input-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.input-row .drop { min-height: 104px; }
+.input-row .thumb { height: 104px; }
+.input-row .drop-inner strong { font-size: 12.5px; }
+
+/* 折叠区（原生 details） */
+details.adv, details.sec-d {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel-2); overflow: hidden;
+}
+details.adv > summary, details.sec-d > summary {
+  list-style: none; cursor: pointer; padding: 11px 12px;
+  font-size: 12.5px; display: flex; align-items: center; gap: 8px;
+  -webkit-user-select: none; user-select: none; min-height: 42px;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::after {
+  content: '›'; margin-left: auto; font-size: 17px; line-height: 1;
+  color: var(--muted); transition: transform .2s;
+}
+details[open] > summary::after { transform: rotate(90deg); }
+details.adv > summary { color: var(--muted); }
+details.sec-d > summary { color: var(--text); font-weight: 600; }
+details[open].adv > summary, details[open].sec-d > summary { border-bottom: 1px solid var(--line); }
+.d-body { padding: 12px; display: flex; flex-direction: column; gap: 11px; }
+/* 嵌套的角色微调折叠，去掉外层内边距叠加 */
+.extract-box details.adv { margin-top: 2px; }
+
+/* 角色合成整块折叠时，内层 extract-box 不再重复外框 */
+details.sec-d .extract-box { gap: 8px; }
+
+/* 空预览态的流程指引 */
+.empty-flow {
+  display: flex; flex-direction: column; gap: 7px; text-align: left;
+  max-width: 300px; padding: 20px 22px;
+  background: rgba(0,0,0,.35); border: 1px solid var(--line); border-radius: 12px;
+  backdrop-filter: blur(2px);
+}
+.empty-flow b { font-size: 13.5px; color: var(--text); margin-bottom: 3px; }
+.empty-flow span { font-size: 12px; color: var(--muted); line-height: 1.4; }
+
+/* 移动端：折叠标题更好点，输入图不至于太小 */
+@media (max-width: 900px) {
+  .input-row .drop { min-height: 128px; }
+  .input-row .thumb { height: 128px; }
+}
