@@ -17,9 +17,17 @@
 - 手机端内存保护、HEIC 明确提示与 EXIF 方向校正
 - 导出 65³ `.cube` LUT（含影调、色彩、饱和度；不含空间相关的天空分区和 Bloom）
 
-## 启动
+## 打开网站（推荐，所有系统通用）
 
-双击：
+直接打开：<https://catofkili.github.io/seichi-grader/>
+
+如果已下载整个项目，也可以双击 [`打开线上网站.html`](./打开线上网站.html)，它会在默认浏览器中跳转到线上站点；Windows、macOS 和 Linux 都可用。
+
+## 本地开发（可选）
+
+`启动圣地巡礼工具.command` 是 **macOS 专用** 的本地开发辅助，不是使用网站的必要步骤。它会启动一个带 COOP/COEP 响应头的本地服务：
+
+在 macOS 上双击：
 
 ```bash
 ./启动圣地巡礼工具.command
