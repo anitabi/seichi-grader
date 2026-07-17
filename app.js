@@ -586,9 +586,10 @@ function undoMaskOp() {
   rebuildOpsOverlay();
   applyRefine(false);
   refreshMaskUndoButtons();
-  if (!$('lassoModal').hidden && lassoState.stage === 'refine') {
+  if (!$('lassoModal').hidden && (lassoState.stage === 'refine' || lassoState.mode === 'erase')) {
     rebuildLassoMaskOverlay();
     lassoRedraw();
+    updateKeepBrushUI();
   }
   $('extractStatus').textContent = state.maskOps.length
     ? `已撤销 · 还剩 ${state.maskOps.length} 步修补可撤销`
@@ -2397,9 +2398,11 @@ function lassoRedraw() {
 
 function updateKeepBrushUI() {
   const available = lassoState.mode !== 'erase' && lassoState.stage === 'refine';
+  const canUndoHere = available || lassoState.mode === 'erase';
   $('btnLassoKeep').hidden = !available;
   $('btnLassoPick').hidden = !available;
-  $('btnLassoUndo').hidden = !available;
+  // 橡皮擦同样是可逆编辑：撤销必须留在当前弹窗内，而不是让用户回控制面板找。
+  $('btnLassoUndo').hidden = !canUndoHere;
   $('btnLassoUndo').disabled = !state.maskOps.length;
   $('lassoKeepSize').hidden = !available || !lassoState.keepMode;
   $('btnLassoKeep').classList.toggle('keep-on', lassoState.keepMode);
@@ -2437,6 +2440,7 @@ function openLasso(mode = 'extract') {
   updateKeepBrushUI();
   $('btnLassoRun').textContent = mode === 'erase' ? '擦除圈选区域'
     : mode === 'algorithm' ? '算法抠取圈选区域' : '模型抠取圈选区域';
+  $('btnLassoClear').textContent = mode === 'erase' ? '重画本次擦除' : '重画';
   $('btnLassoRun').disabled = true;
   lassoRedraw();
   $('lassoModal').hidden = false;
@@ -2596,6 +2600,13 @@ $('btnLassoPick').addEventListener('click', () => {
 });
 $('btnLassoUndo').addEventListener('click', undoMaskOp);
 $('btnMaskUndo').addEventListener('click', undoMaskOp);
+// 圈选弹窗内也支持常见的 Ctrl/Cmd + Z；只接管遮罩编辑，避免影响页面其它输入框。
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !$('lassoModal').hidden && state.maskOps.length) {
+    e.preventDefault();
+    undoMaskOp();
+  }
+});
 $('lassoKeepBrush').addEventListener('input', () => lassoRedraw());
 $('btnLassoRun').addEventListener('click', async () => {
   if (lassoState.stage === 'refine') {
@@ -2615,7 +2626,7 @@ $('btnLassoRun').addEventListener('click', async () => {
     const coverage = pushMaskOp({ type: 'erase', idx });
     rebuildLassoMaskOverlay();
     lassoRedraw();
-    $('extractStatus').textContent = `已从已识别目标中擦除 ${idx.length.toLocaleString()} 个像素 · 当前角色占画面 ${((coverage || 0) * 100).toFixed(0)}% · 可撤销`;
+    $('extractStatus').textContent = `已从已识别目标中擦除 ${idx.length.toLocaleString()} 个像素 · 当前角色占画面 ${((coverage || 0) * 100).toFixed(0)}% · 可点“撤销上一步”恢复`;
     return;
   }
   let sx = 0, sy = 0;

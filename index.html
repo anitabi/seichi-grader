@@ -208,8 +208,8 @@
               <button type="button" class="info-tip" aria-label="说明" data-tip="打开后仅已识别目标会亮起；在亮起的部分圈选，即可把它重新加回暗蒙版">i</button>
             </div>
             <div class="extract-row">
-              <button id="btnMaskUndo" class="ghost" disabled>↩ 撤销修补</button>
-              <button type="button" class="info-tip" aria-label="说明" data-tip="撤销最近一次补画、点选补块或橡皮擦，可连续撤销到最初">i</button>
+              <button id="btnMaskUndo" class="ghost" disabled>↩ 撤销上一步</button>
+              <button type="button" class="info-tip" aria-label="说明" data-tip="撤销最近一次补画、点选补块或橡皮擦；可连续撤销到最初，也可在后续用补画覆盖擦除">i</button>
             </div>
             <button id="btnExportCharacter" class="ghost" disabled>导出角色透明 PNG</button>
             <label class="check">
@@ -350,7 +350,7 @@
       <div class="lasso-keep">
         <button type="button" id="btnLassoPick" class="small" hidden>👆 点选补块</button>
         <button type="button" id="btnLassoKeep" class="small">🖊 补画（刷开蒙版）</button>
-        <button type="button" id="btnLassoUndo" class="small" hidden>↩ 撤销</button>
+        <button type="button" id="btnLassoUndo" class="small" hidden>↩ 撤销上一步</button>
         <label id="lassoKeepSize" hidden>粗细 <input id="lassoKeepBrush" type="range" min="4" max="160" value="36" /></label>
       </div>
       <div class="lasso-actions">
@@ -386,6 +386,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=20260717-erase-mask"></script>
+  <script type="module" src="./app.js?v=20260717-mask-undo"></script>
 </body>
 </html>
