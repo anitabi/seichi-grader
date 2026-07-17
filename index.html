@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="从动画截图提取色调和配色，一键套用到实景圣地巡礼照片；还可把动画角色合成进实景画面。" />
   <meta name="theme-color" content="#0e1014" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -59,7 +60,7 @@
           <img class="thumb" id="thumbAnime" alt="" hidden />
         </div>
         <div class="drop" id="dropPhoto">
-          <input type="file" id="filePhoto" accept="image/jpeg,image/png,image/webp,.heic,.heif" hidden />
+          <input type="file" id="filePhoto" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" hidden />
           <div class="drop-inner">
             <strong>② 实景照片</strong>
             <span class="hint">被调色</span>
@@ -68,6 +69,12 @@
         </div>
       </div>
       <button id="btnShoot" class="ghost shoot-btn">📷 现场取景拍摄（对着动画构图拍）</button>
+      <button id="btnMatchScene" class="ghost shoot-btn" disabled>🔍 从多张照片里找最像截图的</button>
+      <input type="file" id="matchFiles" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" multiple hidden />
+      <div class="match-results" id="matchResults" hidden>
+        <label>按相似度推荐前三张，点选作为实景照片</label>
+        <div class="match-grid" id="matchGrid"></div>
+      </div>
       <label class="check compact">
         <input type="checkbox" id="ignoreSub" checked />
         <span>忽略动画底部字幕带</span>
@@ -108,6 +115,13 @@
             <span>③ 导出对比图 · 可选把动画角色抠进画面</span>
           </div>
         </div>
+      </div>
+      <div class="char-bar" id="charBar" hidden>
+        <span class="char-bar-label">角色大小</span>
+        <input type="range" id="charScaleQuick" min="20" max="300" value="100" />
+        <span class="char-bar-val" id="charScaleQuickVal">100%</span>
+        <button id="btnCharReset" class="small" title="回到抠图时自动给出的大小和位置">还原</button>
+        <button id="btnCharLock" class="small" title="锁住角色的大小和位置，防止误触">固定</button>
       </div>
       <div class="preview-actions">
         <button id="btnAlign" class="ghost small" disabled>构图对齐</button>
@@ -150,15 +164,32 @@
         </details>
       </div>
 
-      <!-- 角色合成（可选） -->
-      <details class="sec-d">
-        <summary>角色合成 · 把动画角色抠进实景（可选）</summary>
+      <!-- 角色合成：产品的核心玩法，默认展开以便首次使用者发现 -->
+      <details class="sec-d character-section" open>
+        <summary>
+          <span class="character-summary-copy">
+            <span class="character-summary-title">角色合成 <span class="feature-badge">重点功能</span></span>
+            <span class="character-summary-subtitle">把动画角色抠进你的实景画面</span>
+          </span>
+        </summary>
         <div class="d-body">
           <div class="extract-box">
-            <button id="btnExtract" class="ghost" disabled>扒取人物（纯算法·秒开）</button>
-            <button id="btnExtractAI" class="ghost ai" disabled>AI 抠角色（首次下载约 127MB）</button>
-            <button id="btnLasso" class="ghost" disabled>圈选抠角色（AI 找不到时手动圈）</button>
-            <button id="btnEraseMask" class="ghost" disabled>抠图橡皮擦（减选）</button>
+            <div class="extract-row">
+              <button id="btnExtractAI" class="ghost ai" disabled>模型抠像</button>
+              <button type="button" class="info-tip" aria-label="说明" data-tip="AI 模型抠像，效果最好；单次约 15 秒，首次使用需下载约 130MB 模型">i</button>
+            </div>
+            <div class="extract-row">
+              <button id="btnLasso" class="ghost" disabled>圈选抠像</button>
+              <button type="button" class="info-tip" aria-label="说明" data-tip="圈出人物所在的位置，帮模型精确定位；多人、远景小人或模型漏检时用">i</button>
+            </div>
+            <div class="extract-row">
+              <button id="btnExtract" class="ghost" disabled>算法抠像</button>
+              <button type="button" class="info-tip" aria-label="说明" data-tip="纯算法抠像，秒出但误差较大；建议网络不佳、下载不了模型时使用">i</button>
+            </div>
+            <div class="extract-row">
+              <button id="btnEraseMask" class="ghost" disabled>橡皮擦</button>
+              <button type="button" class="info-tip" aria-label="说明" data-tip="框住误识别的部分，把它从抠图结果里擦掉">i</button>
+            </div>
             <button id="btnExportCharacter" class="ghost" disabled>导出角色透明 PNG</button>
             <label class="check">
               <input type="checkbox" id="hiresDet" />
@@ -181,8 +212,8 @@
                 <input type="range" id="maskThr" min="40" max="200" value="110" />
                 <label class="mini">边缘收紧（去背景晕边）<span id="maskErodeVal">0px</span></label>
                 <input type="range" id="maskErode" min="0" max="10" value="0" />
-                <label class="mini">角色大小 <span id="charScaleVal">82%</span></label>
-                <input type="range" id="charScale" min="15" max="160" value="82" />
+                <label class="mini">角色大小 <span id="charScaleVal">100%</span>（100% = 与动画同比例）</label>
+                <input type="range" id="charScale" min="20" max="300" value="100" />
                 <label class="mini">光照融合 <span id="harmonizeVal">35%</span></label>
                 <input type="range" id="harmonize" min="0" max="70" value="35" />
                 <label class="mini">落地阴影 <span id="shadowVal">25%</span></label>
@@ -206,7 +237,7 @@
           <button id="btnExportCompare" disabled>导出对比图</button>
           <button id="btnExportWipe" disabled>导出滑动对比动图</button>
         </div>
-        <input type="file" id="batchFiles" accept="image/jpeg,image/png,image/webp,.heic,.heif" multiple hidden />
+        <input type="file" id="batchFiles" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" multiple hidden />
         <button id="btnBatchExport" disabled>批量套用当前风格并导出</button>
         <div class="export-note">选择多张实景照片，依次按当前动画截图与调色参数导出 JPEG；浏览器可能会询问是否允许多个下载。</div>
         <details class="adv">
@@ -246,6 +277,7 @@
               <div id="modelCacheHint" class="export-note">基础调色不需要下载 AI 模型。出门前可在 Wi‑Fi 下下载自动抠图离线包。</div>
               <button id="btnCacheModels" class="small">下载自动抠图离线包（约 127MB）</button>
               <button id="btnCacheSam" class="small">下载 SAM 高质量兜底包（约 38MB）</button>
+              <button id="btnCacheMatch" class="small">下载找图匹配离线包（约 21MB）</button>
               <button id="btnClearModelCache" class="small">删除 AI 离线包</button>
               <button id="btnExportDiagnostics" class="small">导出诊断信息（排错用）</button>
               <div id="deviceStatus" class="export-note"></div>
@@ -261,7 +293,12 @@
 
   <div id="lassoModal" class="lasso-modal" hidden>
     <div class="lasso-head">
-      <span id="lassoTip">在截图上圈出要抠的角色——随手画个圈就行，不必精确贴边</span>
+      <span id="lassoTip">拖出一个框住角色的矩形——不必精确贴边</span>
+      <div class="lasso-shapes" id="lassoShapes">
+        <button data-shape="rect" class="small shape-on">▭ 矩形</button>
+        <button data-shape="ellipse" class="small">◯ 圆形</button>
+        <button data-shape="free" class="small">✎ 画笔</button>
+      </div>
       <div class="lasso-actions">
         <button id="btnLassoRun" class="primary small" disabled>抠取圈选区域</button>
         <button id="btnLassoClear" class="small">重画</button>

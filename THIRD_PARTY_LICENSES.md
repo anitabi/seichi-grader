@@ -8,6 +8,7 @@
 | ISNet Anime | `models/isnet-anime-fp16.onnx`, `models/isnet-anime-512-fp16.onnx` | [SkyTNT/anime-segmentation](https://github.com/SkyTNT/anime-segmentation) / [模型仓库](https://huggingface.co/skytnt/anime-seg) | **权重许可未标注**；代码仓库为 Apache-2.0 | **公开发布阻塞项**：不能只凭训练代码仓库的 Apache-2.0 就断言 ONNX 权重可再分发。需取得权重作者的明确许可，或替换为模型卡明确标注可再分发许可的权重。 |
 | SlimSAM 77 uniform | `models/sam-encoder.onnx`, `models/sam-decoder.onnx` | [Xenova/slimsam-77-uniform](https://huggingface.co/Xenova/slimsam-77-uniform) | Apache-2.0 | 可再分发，需附 Apache-2.0、保留 NOTICE/修改说明（如有） |
 | ONNX Runtime Web | CDN 运行时 | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) | MIT | 可使用 CDN；发布时保留第三方声明 |
+| DINOv2 ViT-S/14（找图匹配） | `models/scene-embed-int8.onnx` | [facebookresearch/dinov2](https://github.com/facebookresearch/dinov2)，经 [timm `vit_small_patch14_dinov2.lvd142m`](https://huggingface.co/timm/vit_small_patch14_dinov2.lvd142m) 导出（见 `tools/build-scene-embed.py`） | Apache-2.0（权重与代码均标注） | 可再分发，需附 Apache-2.0 并注明「由原权重转换为 int8 ONNX」 |
 
 ## 2026-07-13 核查结论
 

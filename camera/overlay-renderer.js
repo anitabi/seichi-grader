@@ -1,6 +1,7 @@
 // overlay-renderer.js — 把动画参考图叠在实时取景上，四种观察模式。
 // 参考图预处理一次（缩放、预算轮廓），之后每帧只做轻量绘制。
 // 模式：transparent(半透明) / outline(轮廓) / blink(闪烁) / split(左右分割)。
+import { rotateCanvas } from '../canvas-util.js';
 
 class OverlayRenderer {
   // refImage: ImageData | HTMLImageElement | HTMLCanvasElement（动画截图）
@@ -10,8 +11,17 @@ class OverlayRenderer {
     this.split = 0.5;         // split 模式分割线位置 0..1
     this.blinkOn = true;
     this._blinkTimer = 0;
-    this.ref = this._toCanvas(refImage);
+    this._src = this._toCanvas(refImage); // 原始方向的参考图
+    this.rotation = 0;        // 参考图顺时针旋转角（锁定竖屏横拍时用）
+    this.ref = this._src;
     this.outline = null;      // 惰性生成
+  }
+
+  // 旋转参考图（顺时针，0/90/180/270）。aspect/cover/轮廓全部随之更新。
+  setRotation(deg) {
+    this.rotation = ((deg % 360) + 360) % 360;
+    this.ref = rotateCanvas(this._src, this.rotation);
+    if (this.outline) this.outline = this._buildOutline(); // 已生成过才立即重建，否则保持惰性
   }
 
   _toCanvas(src) {
@@ -85,11 +95,14 @@ class OverlayRenderer {
     return { x: (dw - w) / 2, y: (dh - h) / 2, w, h };
   }
 
-  // 每帧调用：把叠加层画到 ctx（尺寸 dw×dh，通常是覆盖 video 的 canvas）。
-  render(ctx, dw, dh) {
+  // 每帧调用：把叠加层画到 ctx。frame 是 video 实际显示的区域，
+  // 这样在 object-fit: contain 产生黑边时，参考图不会漂到黑边上。
+  render(ctx, dw, dh, frame = { x: 0, y: 0, width: dw, height: dh }) {
     ctx.clearRect(0, 0, dw, dh);
-    const r = this._coverRect(dw, dh);
+    const fw = frame.width, fh = frame.height;
+    const r = this._coverRect(fw, fh);
     ctx.save();
+    ctx.translate(frame.x, frame.y);
     if (this.mode === 'transparent') {
       ctx.globalAlpha = this.opacity;
       ctx.drawImage(this.ref, r.x, r.y, r.w, r.h);

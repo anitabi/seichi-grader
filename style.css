@@ -134,6 +134,37 @@ body {
 .swatch:hover::after { opacity: 1; }
 
 .extract-box { display: flex; flex-direction: column; gap: 8px; }
+
+/* 抠图按钮 + ⓘ 说明气泡 */
+.extract-row { display: flex; align-items: center; gap: 8px; position: relative; }
+.extract-row > .ghost { flex: 1; }
+.info-tip {
+  flex: 0 0 auto;
+  width: 22px; height: 22px; padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  background: none; color: var(--muted);
+  font-size: 12px; font-style: italic; font-family: Georgia, serif;
+  line-height: 1; cursor: help;
+}
+.info-tip:hover, .info-tip.open { border-color: var(--accent-2); color: var(--accent-2); }
+.info-tip::after {
+  content: attr(data-tip);
+  display: none;
+  position: absolute;
+  right: 0; bottom: calc(100% + 6px);
+  z-index: 30;
+  width: min(240px, 72vw);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #232a36;
+  color: var(--text);
+  font-size: 12px; font-style: normal; font-family: inherit;
+  line-height: 1.55; text-align: left; white-space: normal;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+}
+.info-tip:hover::after, .info-tip.open::after { display: block; }
 button.ghost {
   border: 1px solid var(--accent-2);
   background: rgba(110, 168, 255, .08);
@@ -172,7 +203,23 @@ button.ghost.ai {
   background:
     repeating-conic-gradient(#1a1d24 0% 25%, #14171d 0% 50%) 50% / 22px 22px;
   overflow: hidden;
+  /* pan-y：页面竖向滚动仍交给浏览器，横向拖拽与双指捏合交给我们 */
+  touch-action: pan-y;
 }
+
+/* 预览正下方的大号角色缩放条 */
+.char-bar {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; /* 窄屏时按钮换行，不挤出屏外 */
+  padding: 10px 14px;
+  background: var(--panel-2);
+  border-top: 1px solid var(--line);
+}
+.char-bar-label { font-size: 13px; white-space: nowrap; }
+.char-bar input[type="range"] { flex: 1 1 140px; height: 28px; }
+.char-bar-val { font-size: 13px; color: var(--accent-2); min-width: 44px; text-align: right; }
+.char-bar button { white-space: nowrap; }
+.char-bar .lock-on { border-color: var(--accent); color: var(--accent); }
 .compare canvas { position: absolute; max-width: 100%; max-height: 100%; }
 .compare-clip {
   position: absolute; inset: 0; overflow: hidden;
@@ -300,6 +347,9 @@ button.small { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
 .lasso-actions { display: flex; gap: 8px; }
 .lasso-stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0 12px 12px; }
 #lassoCanvas { max-width: 100%; max-height: 100%; touch-action: none; cursor: crosshair; border-radius: 8px; }
+.lasso-shapes { display: flex; gap: 6px; }
+.lasso-shapes button { white-space: nowrap; }
+.lasso-shapes .shape-on { border-color: var(--accent); color: var(--accent); }
 
 /* 相机探针入口（临时诊断用） */
 .probe-entry {
@@ -313,6 +363,29 @@ button.small { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
 /* 现场取景按钮 */
 .shoot-btn { width: 100%; margin: 8px 0 0; border-color: #2f6df0; color: #9db4ff; }
 .shoot-btn:not(:disabled):active { background: #1c2740; }
+
+.match-results { margin-top: 10px; }
+.match-results > label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 8px; }
+.match-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.match-item {
+  position: relative;
+  padding: 0;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.match-item:hover { border-color: var(--accent-2); }
+.match-item.selected { border-color: var(--accent); }
+.match-item canvas { width: 100%; height: 72px; object-fit: cover; display: block; }
+.match-item span {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 2px 4px;
+  font-size: 10px; color: #fff; text-align: center;
+  background: rgba(0, 0, 0, .55);
+}
 
 /* ==================== UI/UX 重构：分区 + 折叠 + 并列输入 ==================== */
 
@@ -358,6 +431,28 @@ details[open].adv > summary, details[open].sec-d > summary { border-bottom: 1px 
 
 /* 角色合成整块折叠时，内层 extract-box 不再重复外框 */
 details.sec-d .extract-box { gap: 8px; }
+
+/* 核心玩法：即使尚未上传素材，也要让用户一眼看到角色合成入口 */
+details.character-section {
+  border-color: rgba(255, 94, 138, .62);
+  background:
+    linear-gradient(135deg, rgba(255, 94, 138, .14), rgba(110, 168, 255, .12)),
+    var(--panel-2);
+  box-shadow: 0 0 0 1px rgba(110, 168, 255, .12), 0 8px 22px rgba(0, 0, 0, .18);
+}
+details.character-section > summary {
+  min-height: 58px;
+  padding: 10px 12px;
+}
+.character-summary-copy { display: flex; flex-direction: column; gap: 3px; }
+.character-summary-title { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+.character-summary-subtitle { color: #c3cad8; font-size: 11px; font-weight: 400; }
+.feature-badge {
+  padding: 2px 6px; border-radius: 20px;
+  color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  font-size: 9.5px; font-weight: 700; letter-spacing: .04em;
+}
+details.character-section[open] > summary { background: rgba(13, 16, 23, .18); }
 
 /* 空预览态的流程指引 */
 .empty-flow {

@@ -6,6 +6,7 @@ import {
 import { extractForeground, cutoutCanvas, cleanupAlpha, alphaBBox } from './segment.js';
 import { extractForegroundAI, extractCharactersAI, extractCharactersInRegion, mergeCharacterAlphas } from './ai-segment.js';
 import { releaseAllSessions } from './ort-env.js';
+import { embedImage, cosineSimilarity, SCENE_EMBED_MODEL_URL } from './embed.js';
 import { profile as DEVICE } from './platform.js';
 import { launchViewfinder } from './camera/viewfinder.js';
 
@@ -27,6 +28,9 @@ const state = {
   charSeg: null,       // AI 检测流水线结果 { chars, included:Set }，供勾选角色重合并
   rawW: 0, rawH: 0,
   charPos: { cx: 0.5, cy: 0.62 }, // 角色中心在场景中的归一化位置
+  charBase: null,      // 角色在动画帧里的基准 { relH: bbox高/帧高, cx, cy }；
+                       // 构图对齐后照片≈动画取景，按原占比原位落地，100%=与动画同比例
+  charLock: false,     // 固定角色：拖拽/捏合/滚轮/滑杆全部忽略，防误触（还原按钮仍有效）
   charDraw: null,      // 角色在 canvas 坐标的绘制矩形 {dx,dy,dw,dh}，用于拖拽命中
   harmonizedCache: null,
   gradeCache: null,   // 图片不变时复用统计、CDF 与天空掩膜；滑杆只重套用
@@ -61,8 +65,13 @@ function updateWorkflow() {
   }
 }
 
-// 把 File 读成按 MAX_DIM 缩放后的 ImageData
-function fileToImageData(file) {
+// 把 File 读成按 MAX_DIM 缩放后的 ImageData。RAW 先抽内嵌 JPEG 预览再解码。
+async function fileToImageData(file) {
+  if (isRawFile(file)) return decodeRawViaPreview(file);
+  return decodeBlobToImageData(file, file);
+}
+
+function decodeBlobToImageData(blob, file) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -78,16 +87,51 @@ function fileToImageData(file) {
     };
     img.onerror = () => {
       URL.revokeObjectURL(img.src);
+      // iOS 上所有浏览器都是 WebKit 内核，解不了 HEIC 只可能是系统版本老（iOS 17 起才支持网页解码）
       reject(new Error(isHeicFile(file)
-        ? '此版本浏览器无法解码 HEIC/HEIF，请更新 iOS/Safari 或转换为 JPEG 后重试'
+        ? (DEVICE.isAppleMobile
+          ? '系统版本较旧无法解码 HEIC：请升级 iOS，或在相册用「导出为 JPEG」后再传（拍摄端可在 设置→相机→格式 选「兼容性最佳」）'
+          : '此浏览器无法解码 HEIC：请先转成 JPEG 再传（iPhone 相册可直接「导出为 JPEG」；Windows 双击照片用「照片」应用另存为 JPEG），Mac 用户可改用 Safari 打开本站')
         : '浏览器无法解码这张图片，请转换为 JPEG 或 PNG 后重试'));
     };
-    img.src = URL.createObjectURL(file);
+    img.src = URL.createObjectURL(blob);
   });
 }
 
 function isHeicFile(file) {
   return /\.(heic|heif)$/i.test(file.name || '') || /image\/(heic|heif)/i.test(file.type || '');
+}
+
+function isRawFile(file) {
+  return /\.(cr2|cr3|nef|arw|dng|orf|rw2|raf|pef|srw)$/i.test(file.name || '');
+}
+
+// RAW 兜底：浏览器解不了 RAW 原始数据，但主流相机 RAW 都内嵌完整 JPEG 预览
+// （多为全尺寸）。在字节流里定位所有 JPEG 段、从大到小试解码，零依赖零许可负担。
+async function decodeRawViaPreview(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const starts = [], ends = [];
+  for (let i = 0; i < bytes.length - 2; i++) {
+    if (bytes[i] !== 0xff) continue;
+    if (bytes[i + 1] === 0xd8 && bytes[i + 2] === 0xff) starts.push(i);
+    else if (bytes[i + 1] === 0xd9) ends.push(i);
+  }
+  const candidates = [];
+  let e = 0;
+  for (const s of starts) {
+    while (e < ends.length && ends[e] < s) e++;
+    if (e < ends.length) candidates.push({ start: s, len: ends[e] + 2 - s });
+  }
+  candidates.sort((a, b) => b.len - a.len);
+  for (const c of candidates.slice(0, 3)) {
+    try {
+      const blob = new Blob([bytes.subarray(c.start, c.start + c.len)], { type: 'image/jpeg' });
+      const data = await decodeBlobToImageData(blob, file);
+      data.fromRawPreview = true;
+      return data;
+    } catch { /* 段不完整（如嵌套缩略图截断），试下一个 */ }
+  }
+  throw new Error('无法从这张 RAW 提取内嵌预览，请先用相机厂商软件或系统相册导出为 JPEG 再上传');
 }
 
 // 只读取 JPEG EXIF 的 GPS；没有坐标或解析失败不会影响上传与调色。
@@ -277,7 +321,36 @@ function scheduleRecompute() {
 function redrawComposite() {
   if (!state.gradedData) return;
   drawToCanvas($('canvasGraded'), state.gradedData);
-  if (state.cutout && $('composite').checked) compositeCharacter($('canvasGraded'));
+  const showChar = state.cutout && $('composite').checked;
+  if (showChar) compositeCharacter($('canvasGraded'));
+  // 预览下方的大号缩放条：有角色时才出现，并与控制面板滑杆保持同值
+  $('charBar').hidden = !showChar;
+  if ($('charScaleQuick').value !== $('charScale').value) {
+    $('charScaleQuick').value = $('charScale').value;
+  }
+  $('charScaleQuickVal').textContent = $('charScale').value + '%';
+}
+
+// 角色缩放的唯一入口：钳到滑杆范围，双滑杆/标签同步后重绘
+function setCharScale(value) {
+  const v = Math.max(20, Math.min(300, Math.round(Number(value) || 100)));
+  $('charScale').value = v;
+  $('charScaleVal').textContent = v + '%';
+  redrawComposite();
+}
+
+// 还原：回到抠图时自动给出的大小（100%=与动画同比例）和动画原位
+function resetCharPlacement() {
+  if (state.charBase) state.charPos = { cx: state.charBase.cx, cy: state.charBase.cy };
+  setCharScale(100);
+}
+
+function setCharLock(locked) {
+  state.charLock = locked;
+  $('charScale').disabled = locked;
+  $('charScaleQuick').disabled = locked;
+  $('btnCharLock').textContent = locked ? '已固定 🔒' : '固定';
+  $('btnCharLock').classList.toggle('lock-on', locked);
 }
 
 // 让两个叠放的 canvas 在容器内等比同尺寸显示。
@@ -363,7 +436,7 @@ function compositeCharacter(canvas, record = true) {
   const ctx = canvas.getContext('2d');
   const ch = harmonizedCutout();
   const scalePct = parseInt($('charScale').value, 10) / 100;
-  const dh = canvas.height * scalePct;
+  const dh = canvas.height * (state.charBase?.relH || 0.45) * scalePct;
   const scale = dh / ch.height;
   const dw = ch.width * scale;
   const dx = state.charPos.cx * canvas.width - dw / 2;
@@ -396,6 +469,13 @@ function applyRefine(resetPos) {
   const clean = cleanupAlpha(state.rawAlpha, w, h, { thr, erode, featherR: 2 });
   const { bbox, coverage } = alphaBBox(clean, w, h);
   state.cutout = bbox ? cutoutCanvas(state.anime.imgData, { alpha: clean, bbox }) : null;
+  if (bbox) {
+    state.charBase = {
+      relH: bbox.h / h,
+      cx: (bbox.x + bbox.w / 2) / w,
+      cy: (bbox.y + bbox.h / 2) / h,
+    };
+  }
   if (state.cutout) {
     // 去色渗：羽化边缘的 RGB 混有动画背景色，向内部实心像素取色修正
     const ctx = state.cutout.getContext('2d');
@@ -406,7 +486,11 @@ function applyRefine(resetPos) {
   invalidateHarmonize();
   $('btnExportCharacter').disabled = !state.cutout;
   $('btnEraseMask').disabled = !state.cutout;
-  if (resetPos) state.charPos = { cx: 0.5, cy: 0.62 };
+  // 新抠图默认按动画里的原位、原比例落地（照片已与动画同构图），拖拽/滑杆仍可自由调整
+  if (resetPos) {
+    state.charPos = state.charBase ? { cx: state.charBase.cx, cy: state.charBase.cy } : { cx: 0.5, cy: 0.62 };
+    setCharScale(100);
+  }
   redrawComposite();
   updateWorkflow();
   return coverage;
@@ -417,7 +501,7 @@ function bindDrop(dropId, inputId, thumbId, onLoad) {
   const drop = $(dropId), input = $(inputId), thumb = $(thumbId);
   const handle = async (file) => {
     if (!file) return;
-    const imageExt = /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name || '');
+    const imageExt = /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name || '') || isRawFile(file);
     if (!file.type.startsWith('image/') && !imageExt) { setStatus('请选择 JPEG、PNG、WebP 或 HEIC 图片'); return; }
     try {
       setStatus(isHeicFile(file) ? '使用系统解码 HEIC 并校正方向…' : '读取图片并校正 EXIF 方向…');
@@ -448,6 +532,8 @@ async function handleAnimeData(data) {
   $('btnExtract').disabled = false;
   $('btnExtractAI').disabled = false;
   $('btnLasso').disabled = false;
+  $('btnMatchScene').disabled = false;
+  $('matchResults').hidden = true; // 旧结果按旧截图排序，换截图后作废
   $('btnEraseMask').disabled = true;
   $('btnExportCharacter').disabled = true;
   $('extractStatus').textContent = '点击「扒取人物」试试';
@@ -467,7 +553,7 @@ async function handlePhotoData(data) {
   exitAlignMode(false);
   $('btnAlign').disabled = !state.anime;
   updateWorkflow();
-  setStatus(`照片已读取 · 原图 ${state.photo.originalWidth}×${state.photo.originalHeight} · 预览 ${data.width}×${data.height}`);
+  setStatus(`照片已读取 · ${data.fromRawPreview ? 'RAW 内嵌预览' : '原图'} ${state.photo.originalWidth}×${state.photo.originalHeight} · 预览 ${data.width}×${data.height}`);
   recompute();
 }
 
@@ -510,9 +596,16 @@ $('grain').addEventListener('input', (e) => {
   redrawComposite();
 });
 
-$('charScale').addEventListener('input', (e) => {
-  $('charScaleVal').textContent = e.target.value + '%';
-  redrawComposite();
+$('charScale').addEventListener('input', (e) => { if (!state.charLock) setCharScale(e.target.value); });
+$('charScaleQuick').addEventListener('input', (e) => { if (!state.charLock) setCharScale(e.target.value); });
+$('btnCharReset').addEventListener('click', resetCharPlacement);
+$('btnCharLock').addEventListener('click', () => setCharLock(!state.charLock));
+
+// ⓘ 说明气泡：手机没有 hover，点按切换；点别处或再点一次收起
+document.addEventListener('click', (e) => {
+  const tip = e.target.closest('.info-tip');
+  document.querySelectorAll('.info-tip.open').forEach((el) => { if (el !== tip) el.classList.remove('open'); });
+  if (tip) tip.classList.toggle('open');
 });
 
 // 抠图阈值 / 收边：从 rawAlpha 重算，无需重新推理
@@ -838,7 +931,24 @@ $('alignOpacity').addEventListener('input', (e) => {
 
   handle.addEventListener('pointerdown', (e) => { sliderDrag = true; e.stopPropagation(); });
 
+  // 双指捏合缩放角色（手机）：第二根手指落下即接管，抬起一根即结束
+  const pointers = new Map();
+  const pinch = { active: false, startDist: 0, startScale: 100 };
+  const pinchDist = () => {
+    const [a, b] = [...pointers.values()];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+
   compare.addEventListener('pointerdown', (e) => {
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size === 2 && state.cutout && $('composite').checked && !alignState.active && !state.charLock) {
+      pinch.active = true;
+      charDrag = sliderDrag = false;
+      pinch.startDist = pinchDist() || 1;
+      pinch.startScale = parseInt($('charScale').value, 10);
+      compare.classList.remove('grabbing');
+      return;
+    }
     const p = toCanvas(e.clientX, e.clientY);
     if (alignState.active) {
       alignDrag = true;
@@ -846,7 +956,7 @@ $('alignOpacity').addEventListener('input', (e) => {
       compare.classList.add('grabbing');
       return;
     }
-    if (state.cutout && $('composite').checked && p.inDisplay && hitChar(p.x, p.y)) {
+    if (state.cutout && $('composite').checked && !state.charLock && p.inDisplay && hitChar(p.x, p.y)) {
       charDrag = true;
       grabDX = p.x - (state.charPos.cx * gradedCanvas.width);
       grabDY = p.y - (state.charPos.cy * gradedCanvas.height);
@@ -857,6 +967,11 @@ $('alignOpacity').addEventListener('input', (e) => {
   });
 
   window.addEventListener('pointermove', (e) => {
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch.active) {
+      if (pointers.size >= 2) setCharScale(pinch.startScale * (pinchDist() / pinch.startDist));
+      return;
+    }
     if (alignDrag) {
       const p = toCanvas(e.clientX, e.clientY);
       // 画布 1px = 裁剪框宽/画布宽 的照片像素；拖照片方向与拖裁剪框相反
@@ -875,9 +990,22 @@ $('alignOpacity').addEventListener('input', (e) => {
       moveSlider(e.clientX);
     }
   });
-  window.addEventListener('pointerup', () => {
+  const releasePointer = (e) => {
+    pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinch.active = false;
     sliderDrag = false; charDrag = false; alignDrag = false; compare.classList.remove('grabbing');
-  });
+  };
+  window.addEventListener('pointerup', releasePointer);
+  window.addEventListener('pointercancel', releasePointer);
+
+  // 桌面：滚轮悬停在角色上直接缩放
+  compare.addEventListener('wheel', (e) => {
+    if (!state.cutout || !$('composite').checked || alignState.active || state.charLock) return;
+    const p = toCanvas(e.clientX, e.clientY);
+    if (!p.inDisplay || !hitChar(p.x, p.y)) return;
+    e.preventDefault();
+    setCharScale(parseInt($('charScale').value, 10) * (e.deltaY < 0 ? 1.06 : 1 / 1.06));
+  }, { passive: false });
 })();
 
 window.addEventListener('resize', () => { if (state.photo) syncCanvasSize(); });
@@ -1237,7 +1365,7 @@ $('batchFiles').addEventListener('change', async (event) => {
   if (!files.length) return;
   const saved = { photo: state.photo, gradedData: state.gradedData, transform: state.transform, gradeCache: state.gradeCache, cutout: state.cutout };
   const btn = $('btnBatchExport'); btn.disabled = true;
-  let completed = 0, failed = 0;
+  let completed = 0, failed = 0, failReason = '';
   try {
     state.cutout = null; // 批量套色不意外带入当前手工摆放的角色。
     for (let i = 0; i < files.length; i++) {
@@ -1261,6 +1389,7 @@ $('batchFiles').addEventListener('change', async (event) => {
         completed++;
       } catch (error) {
         console.error(error); rememberError('batch-export', error); failed++;
+        if (!failReason) failReason = error.message || String(error);
       }
     }
   } finally {
@@ -1268,8 +1397,104 @@ $('batchFiles').addEventListener('change', async (event) => {
     state.gradeCache = saved.gradeCache; state.cutout = saved.cutout;
     if (state.photo) recompute();
     btn.disabled = !state.anime;
-    setStatus(`批量导出完成：${completed} 张成功${failed ? `，${failed} 张失败` : ''}`);
+    setStatus(`批量导出完成：${completed} 张成功${failed ? `，${failed} 张失败（${failReason}）` : ''}`);
   }
+});
+
+// ---------- 找最像的实景（场景嵌入匹配，见 embed.js） ----------
+// 逐张「解码→编码→释放」，全程只保留 Top3 的缩略图与 File 引用，几十张也不会撑爆内存。
+const MATCH_MAX_FILES = 60;
+const MATCH_TOP_K = 3;
+
+function makeMatchThumb(imgData, maxSide = 220) {
+  const scale = Math.min(1, maxSide / Math.max(imgData.width, imgData.height));
+  const w = Math.max(1, Math.round(imgData.width * scale));
+  const h = Math.max(1, Math.round(imgData.height * scale));
+  const src = document.createElement('canvas');
+  src.width = imgData.width; src.height = imgData.height;
+  src.getContext('2d').putImageData(imgData, 0, 0);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(src, 0, 0, w, h);
+  return c;
+}
+
+// 点选某张推荐结果：走与手动上传完全相同的读取路径
+async function useMatchedPhoto(entry, item) {
+  try {
+    setStatus('读取选中的实景照片…');
+    const [data, gps] = await Promise.all([fileToImageData(entry.file), readExifGPS(entry.file)]);
+    data.gps = gps;
+    $('thumbPhoto').src = data.url; $('thumbPhoto').hidden = false;
+    await handlePhotoData(data);
+    [...$('matchGrid').children].forEach((el) => el.classList.toggle('selected', el === item));
+  } catch (e) { setStatus('读取失败：' + (e.message || e)); }
+}
+
+function renderMatchResults(top) {
+  const grid = $('matchGrid');
+  grid.textContent = '';
+  for (const entry of top) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'match-item';
+    item.title = entry.file.name || '';
+    item.appendChild(entry.thumb);
+    const label = document.createElement('span');
+    label.textContent = `相似度 ${Math.max(0, Math.round(entry.sim * 100))}%`;
+    item.appendChild(label);
+    item.addEventListener('click', () => useMatchedPhoto(entry, item));
+    grid.appendChild(item);
+  }
+  $('matchResults').hidden = !top.length;
+}
+
+$('btnMatchScene').addEventListener('click', () => {
+  if (!state.anime) { setStatus('请先上传动画截图'); return; }
+  $('matchFiles').value = '';
+  $('matchFiles').click();
+});
+
+$('matchFiles').addEventListener('change', async (event) => {
+  const files = [...event.target.files].slice(0, MATCH_MAX_FILES);
+  if (!files.length || !state.anime) return;
+  const btn = $('btnMatchScene'); btn.disabled = true;
+  $('matchResults').hidden = true;
+  try {
+    setStatus('准备找图匹配模型…');
+    const fmtMB = (n) => (n / 1048576).toFixed(1);
+    const query = await embedImage(state.anime.imgData, {
+      onProgress: (r, t) => setStatus(`下载找图匹配模型 ${fmtMB(r)}/${fmtMB(t)} MB…`),
+    });
+    const top = [];
+    let compared = 0, failed = 0, failReason = '';
+    for (let i = 0; i < files.length; i++) {
+      try {
+        setStatus(`比对 ${i + 1}/${files.length}：${files[i].name || ''}`);
+        const data = await fileToImageData(files[i]);
+        const sim = cosineSimilarity(query, await embedImage(data.imgData));
+        const thumb = makeMatchThumb(data.imgData);
+        URL.revokeObjectURL(data.url);
+        top.push({ file: files[i], sim, thumb });
+        top.sort((a, b) => b.sim - a.sim);
+        if (top.length > MATCH_TOP_K) top.length = MATCH_TOP_K; // 落选缩略图交给 GC
+        compared++;
+      } catch (e) {
+        console.warn('找图比对失败', files[i]?.name, e);
+        failed++;
+        if (!failReason) failReason = e.message || String(e); // 把第一条失败原因带给用户（如 HEIC/RAW 指引）
+      }
+    }
+    renderMatchResults(top);
+    setStatus(compared
+      ? `找图完成：共比对 ${compared} 张${failed ? `，${failed} 张读取失败（${failReason}）` : ''}${event.target.files.length > MATCH_MAX_FILES ? `（超过 ${MATCH_MAX_FILES} 张的部分未参加）` : ''}，点选最像的一张`
+      : `找图失败：所选照片都无法读取（${failReason}）`);
+  } catch (e) {
+    console.error(e); rememberError('scene-match', e);
+    setStatus('找图匹配失败：' + (e.message || e));
+  } finally { btn.disabled = !state.anime; }
 });
 
 // ---------- 参数自动恢复与风格预设 ----------
@@ -1287,7 +1512,8 @@ function captureSettings() {
     const el = $(id);
     values[id] = el.type === 'checkbox' ? el.checked : el.value;
   }
-  return { version: 1, values, charPos: { ...state.charPos } };
+  // version 2：charScale 语义从「占画面高%」改为「相对动画同比例%」
+  return { version: 2, values, charPos: { ...state.charPos } };
 }
 
 function syncControlLabels() {
@@ -1302,9 +1528,11 @@ function syncControlLabels() {
 
 function applySettings(saved, rerender = true) {
   if (!saved || !saved.values) return false;
+  const legacyScale = (saved.version || 1) < 2; // 旧档的 charScale 是「占画面高%」，不可沿用
   for (const [id, value] of Object.entries(saved.values)) {
     const el = $(id);
     if (!el || !SETTING_IDS.includes(id)) continue;
+    if (legacyScale && id === 'charScale') continue;
     if (el.type === 'checkbox') el.checked = Boolean(value);
     else el.value = String(value);
   }
@@ -1397,12 +1625,14 @@ const ISNET_URL = DEVICE.isAppleMobile ? './models/isnet-anime-512-fp16.onnx' : 
 const ISNET_PARTS = Array.from({ length: 3 }, (_, i) => `${ISNET_URL}.part${String(i).padStart(2, '0')}`);
 const AUTO_MODEL_URLS = ['./models/person-detect.onnx', ...ISNET_PARTS];
 const SAM_MODEL_URLS = ['./models/sam-encoder.onnx', './models/sam-decoder.onnx'];
+const MATCH_MODEL_URLS = [SCENE_EMBED_MODEL_URL];
 const ORT_BASE = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/';
 const RUNTIME_URLS = [
   'ort.webgpu.mjs', 'ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm',
   'ort-wasm-simd-threaded.mjs', 'ort-wasm-simd-threaded.wasm',
 ].map((name) => ORT_BASE + name);
 const AUTO_CACHE_URLS = [...AUTO_MODEL_URLS, ...RUNTIME_URLS];
+const MATCH_CACHE_URLS = [...MATCH_MODEL_URLS, ...RUNTIME_URLS]; // 找图也要能离线，故连运行时一起缓存
 
 const cacheKey = (url) => new URL(url, location.href).href;
 async function cacheHas(cache, url) {
@@ -1416,23 +1646,29 @@ async function updateModelCacheStatus() {
   const label = $('modelCacheStatus');
   if (!('caches' in window) || !('serviceWorker' in navigator)) {
     label.textContent = '此浏览器不支持模型持久缓存';
-    ['btnCacheModels', 'btnCacheSam', 'btnClearModelCache'].forEach((id) => { $(id).disabled = true; });
+    ['btnCacheModels', 'btnCacheSam', 'btnCacheMatch', 'btnClearModelCache'].forEach((id) => { $(id).disabled = true; });
     return;
   }
   try {
     const cache = await caches.open(MODEL_CACHE);
     const autoCount = await countCached(cache, AUTO_CACHE_URLS);
     const samCount = await countCached(cache, SAM_MODEL_URLS);
+    const matchCount = await countCached(cache, MATCH_CACHE_URLS);
     const autoReady = autoCount === AUTO_CACHE_URLS.length;
     const samReady = samCount === SAM_MODEL_URLS.length;
+    const matchReady = matchCount === MATCH_CACHE_URLS.length;
     label.textContent = `自动抠图：${autoReady ? '已可离线使用 ✓' : `${autoCount}/${AUTO_CACHE_URLS.length} 个文件`}`
-      + ` · SAM 兜底：${samReady ? '已可离线使用 ✓' : `${samCount}/${SAM_MODEL_URLS.length} 个文件`}`;
+      + ` · SAM 兜底：${samReady ? '已可离线使用 ✓' : `${samCount}/${SAM_MODEL_URLS.length} 个文件`}`
+      + ` · 找图匹配：${matchReady ? '已可离线使用 ✓' : `${matchCount}/${MATCH_CACHE_URLS.length} 个文件`}`;
     $('btnCacheModels').textContent = autoReady
       ? '自动抠图离线包已就绪 ✓'
       : autoCount ? `继续下载自动抠图离线包（已完成 ${autoCount}/${AUTO_CACHE_URLS.length}）` : '下载自动抠图离线包（约 127MB）';
     $('btnCacheSam').textContent = samReady
       ? 'SAM 高质量兜底包已就绪 ✓'
       : samCount ? `继续下载 SAM 兜底包（已完成 ${samCount}/${SAM_MODEL_URLS.length}）` : '下载 SAM 高质量兜底包（约 38MB）';
+    $('btnCacheMatch').textContent = matchReady
+      ? '找图匹配离线包已就绪 ✓'
+      : matchCount ? `继续下载找图匹配包（已完成 ${matchCount}/${MATCH_CACHE_URLS.length}）` : '下载找图匹配离线包（约 21MB）';
   } catch (e) { label.textContent = '无法读取模型缓存：' + (e.message || e); }
 }
 
@@ -1463,6 +1699,7 @@ async function downloadOfflinePackage(kind, urls, button) {
 
 $('btnCacheModels').addEventListener('click', () => downloadOfflinePackage('自动抠图离线包', AUTO_CACHE_URLS, $('btnCacheModels')));
 $('btnCacheSam').addEventListener('click', () => downloadOfflinePackage('SAM 高质量兜底包', SAM_MODEL_URLS, $('btnCacheSam')));
+$('btnCacheMatch').addEventListener('click', () => downloadOfflinePackage('找图匹配离线包', MATCH_CACHE_URLS, $('btnCacheMatch')));
 $('btnClearModelCache').addEventListener('click', async () => {
   const label = $('modelCacheStatus');
   $('btnClearModelCache').disabled = true;
@@ -1519,7 +1756,22 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
 // ---------- 圈选抠图（LR 式手动指定范围）----------
 // 自动检测漏检/抠错/骑车构图无响应时，用户在截图上随手圈出角色，
 // 走与自动流水线相同的"框裁剪 → ISNet → SAM 兜底"，笔迹质心作为 SAM 提示点。
-const lassoState = { pts: [], drawing: false, busy: false, mode: 'extract' };
+// shape：rect=拖矩形（默认）| ellipse=拖圆 | free=自由画笔。
+// 三种形状统一落成 pts 多边形（圆用 48 边形逼近），包围盒/质心/擦除逻辑全复用。
+const lassoState = { pts: [], drawing: false, busy: false, mode: 'extract', shape: 'rect' };
+
+function lassoReady() {
+  if (lassoState.pts.length < 4) return false;
+  const box = lassoBBox();
+  return box.w >= 12 && box.h >= 12;
+}
+
+function updateLassoTip() {
+  const verb = lassoState.mode === 'erase' ? '要从抠图中擦掉的区域' : '要抠的角色';
+  $('lassoTip').textContent = lassoState.shape === 'free'
+    ? `随手圈出${verb}——不必精确贴边`
+    : `按住拖出一个框住${verb}的${lassoState.shape === 'rect' ? '矩形' : '圆'}——不必精确贴边`;
+}
 
 function lassoRedraw() {
   const c = $('lassoCanvas'), ctx = c.getContext('2d');
@@ -1555,9 +1807,7 @@ function openLasso(mode = 'extract') {
   c.width = state.anime.width; c.height = state.anime.height;
   lassoState.pts = []; lassoState.drawing = false;
   lassoState.mode = mode;
-  $('lassoTip').textContent = mode === 'erase'
-    ? '圈出要从当前抠图中擦掉的区域——可多次使用，不会重新下载模型'
-    : '在截图上圈出要抠的角色——随手画个圈就行，不必精确贴边';
+  updateLassoTip();
   $('btnLassoRun').textContent = mode === 'erase' ? '擦除圈选区域' : '抠取圈选区域';
   $('btnLassoRun').disabled = true;
   lassoRedraw();
@@ -1603,7 +1853,7 @@ async function runLassoBox(box, centroid) {
   } finally {
     if (DEVICE.isAppleMobile) await releaseAllSessions();
     lassoState.busy = false;
-    $('btnLassoRun').disabled = lassoState.pts.length < 8;
+    $('btnLassoRun').disabled = !lassoReady();
   }
 }
 
@@ -1641,29 +1891,57 @@ $('btnLassoRun').addEventListener('click', async () => {
 
 (function setupLassoDraw() {
   const c = $('lassoCanvas');
+  let anchor = null; // rect/ellipse 的起始角
   const toImg = (e) => {
     const r = c.getBoundingClientRect();
     return [(e.clientX - r.left) / r.width * c.width, (e.clientY - r.top) / r.height * c.height];
+  };
+  const rectPoly = (a, b) => [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
+  const ellipsePoly = (a, b, n = 48) => {
+    const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2;
+    const rx = Math.abs(b[0] - a[0]) / 2, ry = Math.abs(b[1] - a[1]) / 2;
+    return Array.from({ length: n }, (_, i) => {
+      const t = i / n * Math.PI * 2;
+      return [cx + rx * Math.cos(t), cy + ry * Math.sin(t)];
+    });
   };
   c.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     try { c.setPointerCapture(e.pointerId); } catch { /* 某些环境/合成事件会抛，不影响绘制 */ }
     lassoState.drawing = true;
-    lassoState.pts = [toImg(e)];
+    anchor = toImg(e);
+    lassoState.pts = lassoState.shape === 'free' ? [anchor] : [];
     lassoRedraw();
   });
   c.addEventListener('pointermove', (e) => {
     if (!lassoState.drawing) return;
-    const p = toImg(e), last = lassoState.pts[lassoState.pts.length - 1];
-    if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 3) { lassoState.pts.push(p); lassoRedraw(); }
+    const p = toImg(e);
+    if (lassoState.shape === 'free') {
+      const last = lassoState.pts[lassoState.pts.length - 1];
+      if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 3) { lassoState.pts.push(p); lassoRedraw(); }
+    } else {
+      lassoState.pts = lassoState.shape === 'rect' ? rectPoly(anchor, p) : ellipsePoly(anchor, p);
+      lassoRedraw();
+    }
   });
   const end = () => {
     if (!lassoState.drawing) return;
     lassoState.drawing = false;
-    $('btnLassoRun').disabled = lassoState.pts.length < 8 || lassoState.busy;
+    $('btnLassoRun').disabled = !lassoReady() || lassoState.busy;
   };
   c.addEventListener('pointerup', end);
   c.addEventListener('pointercancel', end);
+
+  $('lassoShapes').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-shape]');
+    if (!btn) return;
+    lassoState.shape = btn.dataset.shape;
+    [...$('lassoShapes').children].forEach((el) => el.classList.toggle('shape-on', el === btn));
+    lassoState.pts = []; lassoState.drawing = false;
+    $('btnLassoRun').disabled = true;
+    updateLassoTip();
+    lassoRedraw();
+  });
 })();
 
 // ---------- 现场取景拍摄 ----------

@@ -6,6 +6,7 @@
 import { CameraSession, checkSupport } from './camera-session.js';
 import { OverlayRenderer } from './overlay-renderer.js';
 import { capturePhoto, cropToAspect } from './capture-adapter.js';
+import { rotateCanvas } from '../canvas-util.js';
 
 const STYLE_ID = 'vf-style';
 const CSS = `
@@ -69,6 +70,7 @@ function launchViewfinder(animeSource) {
         <div class="vf-msg" hidden></div>
         <div class="vf-topbar">
           <button data-act="close">✕ 关闭</button>
+          <button data-act="rotate" aria-label="将动画参考图顺时针旋转 90 度">↻ 旋转 90°</button>
           <button data-act="freeze">❄️ 冻结</button>
         </div>
         <div class="vf-slider"><span data-label="opacity">透明 50%</span><input type="range" min="15" max="100" value="50" data-ctl="opacity"></div>
@@ -102,7 +104,33 @@ function launchViewfinder(animeSource) {
       const lbl = $('[data-label="opacity"]'); if (lbl) lbl.textContent = '透明 72%';
     }
 
-    const showToast = (t) => { toast.textContent = t; toast.classList.add('show'); clearTimeout(showToast._t); showToast._t = setTimeout(() => toast.classList.remove('show'), 1800); };
+    const showToast = (t, ms = 1800) => { toast.textContent = t; toast.classList.add('show'); clearTimeout(showToast._t); showToast._t = setTimeout(() => toast.classList.remove('show'), ms); };
+
+    // CSS 中 video 用 object-fit: contain；叠加图必须只画在视频实际可见的区域，
+    // 否则竖屏下上下的黑边会让参考构图与拍出的画面错位。
+    function visibleVideoRect() {
+      const w = overlay.width, h = overlay.height;
+      if (!video.videoWidth || !video.videoHeight) return { x: 0, y: 0, width: w, height: h };
+      const videoAspect = video.videoWidth / video.videoHeight;
+      const stageAspect = w / h;
+      if (videoAspect > stageAspect) {
+        const height = w / videoAspect;
+        return { x: 0, y: (h - height) / 2, width: w, height };
+      }
+      const width = h * videoAspect;
+      return { x: (w - width) / 2, y: 0, width, height: h };
+    }
+
+    function rotateReference(deg, notify = true) {
+      renderer.setRotation(deg);
+      const btn = $('[data-act="rotate"]');
+      if (btn) btn.textContent = renderer.rotation ? `↻ 已转 ${renderer.rotation}°` : '↻ 旋转 90°';
+      if (notify) {
+        showToast(renderer.rotation
+          ? `参考图已转 ${renderer.rotation}°；拍出的照片会自动转回横构图`
+          : '参考图已恢复原方向');
+      }
+    }
 
     // 模式按钮
     const modesBox = $('.vf-modes');
@@ -138,7 +166,7 @@ function launchViewfinder(animeSource) {
       if (overlay.width !== rect.width || overlay.height !== rect.height) {
         overlay.width = Math.round(rect.width); overlay.height = Math.round(rect.height);
       }
-      renderer.render(octx, overlay.width, overlay.height);
+      renderer.render(octx, overlay.width, overlay.height, visibleVideoRect());
       raf = requestAnimationFrame(frameLoop);
     }
 
@@ -147,7 +175,8 @@ function launchViewfinder(animeSource) {
       if (renderer.mode !== 'split' || frozenState) return;
       const move = (ev) => {
         const r = overlay.getBoundingClientRect();
-        renderer.setSplit((ev.clientX - r.left) / r.width);
+        const visible = visibleVideoRect();
+        renderer.setSplit((ev.clientX - r.left - visible.x) / visible.width);
       };
       move(e);
       const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
@@ -168,6 +197,10 @@ function launchViewfinder(animeSource) {
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'close') return cleanup(null);
+      if (act === 'rotate') {
+        rotateReference(renderer.rotation + 90);
+        return;
+      }
       if (act === 'freeze') return toggleFreeze();
       if (act === 'lens') {
         const label = await session.cycleLens().catch(() => false);
@@ -210,10 +243,12 @@ function launchViewfinder(animeSource) {
       try {
         showToast('拍摄中…');
         const shot = await capturePhoto(session, { level: qualityMode ? 'quality' : 'wysiwyg' });
-        // 裁到参考图比例，保证成图画框与取景对齐一致
+        // 裁到（旋转后）参考图比例，保证成图画框与取景对齐一致；
+        // 参考图转过角度时，成片反向转回，导出即为与动画同向的正图
         const cropped = cropToAspect(shot.canvas, renderer.aspect);
-        showToast(`已拍 ${cropped.width}×${cropped.height}（${shot.via}）`);
-        cleanup(cropped);
+        const upright = rotateCanvas(cropped, -renderer.rotation);
+        showToast(`已拍 ${upright.width}×${upright.height}（${shot.via}）`);
+        cleanup(upright);
       } catch (e) {
         console.error(e); showToast('拍摄失败：' + (e.message || e));
       }
@@ -229,6 +264,13 @@ function launchViewfinder(animeSource) {
         $('[data-act="torch"]').style.display = info.hasTorch ? '' : 'none';
         session.listRearCameras().then((cams) => { if (cams.length < 2) $('[data-act="lens"]').style.display = 'none'; });
         frameLoop();
+        // 横版动画 + 竖持手机：提示两种正确姿势，避免对着被裁成竖条的虚影硬拍
+        if (renderer.aspect > 1 && root.clientHeight > root.clientWidth) {
+          // 大多数动画截图是横构图；竖持手机时先自动转成竖向参考，
+          // 用户仍可用按钮每次再转 90°，拍照时会转回原动画方向。
+          rotateReference(90, false);
+          showToast('已将横版动画参考图转为竖向叠加；点「↻ 已转 90°」可继续旋转', 4500);
+        }
       } catch (e) {
         showError(e.message || String(e), true);
       }
