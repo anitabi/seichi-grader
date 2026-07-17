@@ -1947,9 +1947,9 @@ $('batchFiles').addEventListener('change', async (event) => {
 });
 
 // ---------- 找最像的实景（场景嵌入匹配，见 embed.js） ----------
-// 逐张「解码→编码→释放」，全程只保留 Top3 的缩略图与 File 引用，几十张也不会撑爆内存。
+// 逐张「解码→编码→释放」，保留所有轻量缩略图与 File 引用供用户横向比较；
+// 原图像素在每轮比对后立即释放，仍受 60 张上限保护手机内存。
 const MATCH_MAX_FILES = 60;
-const MATCH_TOP_K = 3;
 
 function makeMatchThumb(imgData, maxSide = 220) {
   const scale = Math.min(1, maxSide / Math.max(imgData.width, imgData.height));
@@ -1978,22 +1978,22 @@ async function useMatchedPhoto(entry, item) {
   } catch (e) { setStatus('读取失败：' + (e.message || e)); }
 }
 
-function renderMatchResults(top) {
+function renderMatchResults(ranked) {
   const grid = $('matchGrid');
   grid.textContent = '';
-  for (const entry of top) {
+  ranked.forEach((entry, index) => {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'match-item';
     item.title = entry.file.name || '';
     item.appendChild(entry.thumb);
     const label = document.createElement('span');
-    label.textContent = `相似度 ${Math.max(0, Math.round(entry.sim * 100))}%`;
+    label.textContent = `#${index + 1} · ${Math.max(0, Math.round(entry.sim * 100))}%`;
     item.appendChild(label);
     item.addEventListener('click', () => useMatchedPhoto(entry, item));
     grid.appendChild(item);
-  }
-  $('matchResults').hidden = !top.length;
+  });
+  $('matchResults').hidden = !ranked.length;
 }
 
 $('btnMatchScene').addEventListener('click', () => {
@@ -2017,7 +2017,7 @@ $('matchFiles').addEventListener('change', async (event) => {
     const query = await embedImage(state.anime.imgData, {
       onProgress: (r, t) => report(`下载 ${fmtMB(r)}/${fmtMB(t)}MB`),
     });
-    const top = [];
+    const ranked = [];
     let compared = 0, failed = 0, failReason = '';
     for (let i = 0; i < files.length; i++) {
       try {
@@ -2026,9 +2026,7 @@ $('matchFiles').addEventListener('change', async (event) => {
         const sim = cosineSimilarity(query, await embedImage(data.imgData));
         const thumb = makeMatchThumb(data.imgData);
         URL.revokeObjectURL(data.url);
-        top.push({ file: files[i], sim, thumb });
-        top.sort((a, b) => b.sim - a.sim);
-        if (top.length > MATCH_TOP_K) top.length = MATCH_TOP_K; // 落选缩略图交给 GC
+        ranked.push({ file: files[i], sim, thumb });
         compared++;
       } catch (e) {
         console.warn('找图比对失败', files[i]?.name, e);
@@ -2036,7 +2034,8 @@ $('matchFiles').addEventListener('change', async (event) => {
         if (!failReason) failReason = e.message || String(e); // 把第一条失败原因带给用户（如 HEIC/RAW 指引）
       }
     }
-    renderMatchResults(top);
+    ranked.sort((a, b) => b.sim - a.sim);
+    renderMatchResults(ranked);
     setStatus(compared
       ? `找图完成：共比对 ${compared} 张${failed ? `，${failed} 张读取失败（${failReason}）` : ''}${event.target.files.length > MATCH_MAX_FILES ? `（超过 ${MATCH_MAX_FILES} 张的部分未参加）` : ''}，点选最像的一张`
       : `找图失败：所选照片都无法读取（${failReason}）`);
