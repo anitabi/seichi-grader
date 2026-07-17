@@ -69,7 +69,10 @@
         </div>
       </div>
       <button id="btnShoot" class="ghost shoot-btn">📷 现场取景拍摄（对着动画构图拍）</button>
-      <button id="btnMatchScene" class="ghost shoot-btn" disabled>🔍 从多张照片里找最像截图的</button>
+      <div class="button-load-row">
+        <button id="btnMatchScene" class="ghost shoot-btn" disabled>🔍 从多张照片里找最像截图的</button>
+        <span id="loadMatchScene" class="button-load" role="status" aria-live="polite" hidden></span>
+      </div>
       <input type="file" id="matchFiles" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" multiple hidden />
       <div class="match-results" id="matchResults" hidden>
         <label>按相似度推荐前三张，点选作为实景照片</label>
@@ -194,6 +197,7 @@
           <div class="extract-box">
             <div class="extract-row">
               <button id="btnExtractAI" class="ghost ai" disabled>模型抠像</button>
+              <span id="loadExtractAI" class="button-load" role="status" aria-live="polite" hidden></span>
               <button type="button" class="info-tip" aria-label="说明" data-tip="AI 模型抠像，效果最好；单次约 15 秒，首次使用需下载约 130MB 模型">i</button>
             </div>
             <div class="extract-row">
@@ -356,6 +360,7 @@
       </div>
       <div class="lasso-actions">
         <button id="btnLassoRun" class="primary small" disabled>抠取圈选区域</button>
+        <span id="loadLasso" class="button-load" role="status" aria-live="polite" hidden></span>
         <button id="btnLassoClear" class="small">重画</button>
         <button id="btnLassoClose" class="small">关闭</button>
       </div>
@@ -387,6 +392,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=20260717-reset-character"></script>
+  <script type="module" src="./app.js?v=20260718-button-progress"></script>
 </body>
 </html>

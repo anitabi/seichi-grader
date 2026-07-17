@@ -52,6 +52,14 @@ if (DEVICE.isAndroid) {
 }
 
 const setStatus = (t) => { $('status').textContent = t; };
+// 耗时操作的总状态仍保留在页面底部，但下载/推理进度也紧贴触发按钮，
+// 让用户不用在面板里寻找“刚才点的按钮到底有没有反应”。
+function setButtonLoad(id, text = '') {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = text;
+  el.hidden = !text;
+}
 const recentErrors = [];
 function rememberError(where, error) {
   recentErrors.push({ at: new Date().toISOString(), where, name: error?.name || 'Error', message: String(error?.message || error) });
@@ -889,10 +897,12 @@ $('btnExtractAI').addEventListener('click', async () => {
   if (state.aiBusy) { $('extractStatus').textContent = 'AI 任务进行中，请稍候…'; return; }
   setAIBusy(true);
   $('btnExportImg').disabled = true;
+  const report = (text) => { $('extractStatus').textContent = text; setButtonLoad('loadExtractAI', text); };
+  report('准备模型…');
   const onProgress = (recv, total) => {
-    $('extractStatus').textContent = `下载模型 ${(recv / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB`;
+    report(`下载 ${(recv / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB`);
   };
-  const onStage = (s) => { $('extractStatus').textContent = s; };
+  const onStage = (s) => report(s);
   try {
     const t0 = performance.now();
     // 两级流水线：先检测角色框，再逐框抠图。所有平台都在 Worker 内运行。
@@ -941,6 +951,7 @@ $('btnExtractAI').addEventListener('click', async () => {
     $('extractStatus').textContent = 'AI 抠图失败：' + (e.message || e);
   } finally {
     setAIBusy(false);
+    setButtonLoad('loadExtractAI');
     if (state.gradedData) $('btnExportImg').disabled = false;
     updateModelCacheStatus();
   }
@@ -1978,17 +1989,18 @@ $('matchFiles').addEventListener('change', async (event) => {
   if (state.aiBusy) { setStatus('AI 任务进行中，请稍候…'); return; }
   setAIBusy(true);
   $('matchResults').hidden = true;
+  const report = (text) => { setStatus(text); setButtonLoad('loadMatchScene', text); };
   try {
-    setStatus('准备找图匹配模型…');
+    report('准备模型…');
     const fmtMB = (n) => (n / 1048576).toFixed(1);
     const query = await embedImage(state.anime.imgData, {
-      onProgress: (r, t) => setStatus(`下载找图匹配模型 ${fmtMB(r)}/${fmtMB(t)} MB…`),
+      onProgress: (r, t) => report(`下载 ${fmtMB(r)}/${fmtMB(t)}MB`),
     });
     const top = [];
     let compared = 0, failed = 0, failReason = '';
     for (let i = 0; i < files.length; i++) {
       try {
-        setStatus(`比对 ${i + 1}/${files.length}：${files[i].name || ''}`);
+        report(`比对 ${i + 1}/${files.length}`);
         const data = await fileToImageData(files[i]);
         const sim = cosineSimilarity(query, await embedImage(data.imgData));
         const thumb = makeMatchThumb(data.imgData);
@@ -2010,7 +2022,7 @@ $('matchFiles').addEventListener('change', async (event) => {
   } catch (e) {
     console.error(e); rememberError('scene-match', e);
     setStatus('找图匹配失败：' + (e.message || e));
-  } finally { setAIBusy(false); }
+  } finally { setAIBusy(false); setButtonLoad('loadMatchScene'); }
 });
 
 // ---------- 参数自动恢复与风格预设 ----------
@@ -2583,10 +2595,12 @@ async function runLassoBox(box, centroid) {
   lassoState.busy = true;
   setAIBusy(true);
   $('btnLassoRun').disabled = true;
-  const onStage = (s) => { $('extractStatus').textContent = s; };
+  const report = (text) => { $('extractStatus').textContent = text; setButtonLoad('loadLasso', text); };
+  const onStage = (s) => report(s);
   const onProgress = (recv, total) => {
-    $('extractStatus').textContent = `下载模型 ${(recv / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB`;
+    report(`下载 ${(recv / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB`);
   };
+  report(lassoState.mode === 'algorithm' ? '准备算法抠像…' : '准备模型…');
   try {
     let found;
     if (lassoState.mode === 'algorithm') {
@@ -2634,6 +2648,7 @@ async function runLassoBox(box, centroid) {
   } finally {
     lassoState.busy = false;
     setAIBusy(false);
+    setButtonLoad('loadLasso');
     if (lassoState.stage !== 'refine') $('btnLassoRun').disabled = !lassoReady();
   }
 }
