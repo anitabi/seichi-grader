@@ -540,6 +540,8 @@ details.character-section > summary {
   min-height: 58px;
   padding: 10px 12px;
 }
+.character-reset { margin-left: auto; padding: 6px 8px; font-size: 11px; }
+details.character-section > summary::after { margin-left: 8px; }
 .character-summary-copy { display: flex; flex-direction: column; gap: 3px; }
 .character-summary-title { display: flex; align-items: center; gap: 7px; font-size: 13px; }
 .character-summary-subtitle { color: #c3cad8; font-size: 11px; font-weight: 400; }

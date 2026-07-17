@@ -610,6 +610,39 @@ function refreshAIEntryButtons() {
   $('btnLasso').disabled = busy || !state.anime;
   $('btnMatchScene').disabled = busy || !state.anime;
   $('btnEraseMask').disabled = busy || !state.cutout;
+  refreshCharacterResetButton();
+}
+
+function refreshCharacterResetButton() {
+  // “两张图刚放上来”的角色状态 = 没有任何抠图、遮罩编辑或角色候选项。
+  const hasCharacterWork = !!(state.cutout || state.rawAlpha || state.charSeg || state.maskOps.length);
+  $('btnResetCharacter').disabled = state.aiBusy || !hasCharacterWork;
+}
+
+function resetCharacterComposite() {
+  if (state.aiBusy) return;
+  closeLasso();
+  state.cutout = null;
+  state.rawAlpha = null; state.rawW = 0; state.rawH = 0; state.finalAlpha = null;
+  state.maskOps = []; state.opsOverlay = null;
+  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 };
+  state.harmonizedCache = null;
+  setCharSeg(null);
+  $('maskThr').value = 110; $('maskThrVal').textContent = '110';
+  $('maskErode').value = 0; $('maskErodeVal').textContent = '0px';
+  $('harmonize').value = 35; $('harmonizeVal').textContent = '35%';
+  $('shadow').value = 25; $('shadowVal').textContent = '25%';
+  $('shadowOffset').value = 0; $('shadowOffsetVal').textContent = '0%';
+  $('grain').value = 12; $('grainVal').textContent = '12%';
+  $('composite').checked = true;
+  setCharLock(false);
+  setCharScale(100);
+  $('btnExportCharacter').disabled = true;
+  refreshMaskUndoButtons();
+  refreshAIEntryButtons();
+  redrawComposite();
+  updateWorkflow();
+  $('extractStatus').textContent = state.anime ? '角色合成已重置 · 可重新选择模型、圈选或算法抠像' : '先上传动画截图';
 }
 
 // 抠图后/调参后：从 rawAlpha 重建清理过的角色 cutout
@@ -759,6 +792,11 @@ $('charScale').addEventListener('input', (e) => { if (!state.charLock) setCharSc
 $('charScaleQuick').addEventListener('input', (e) => { if (!state.charLock) setCharScale(e.target.value); });
 $('btnCharReset').addEventListener('click', resetCharPlacement);
 $('btnCharLock').addEventListener('click', () => setCharLock(!state.charLock));
+$('btnResetCharacter').addEventListener('click', (e) => {
+  // summary 内的按钮不应顺带折叠/展开角色面板。
+  e.preventDefault(); e.stopPropagation();
+  resetCharacterComposite();
+});
 
 // ⓘ 说明气泡：手机没有 hover，点按切换；点别处或再点一次收起
 document.addEventListener('click', (e) => {
