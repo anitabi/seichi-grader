@@ -39,6 +39,15 @@ const state = {
 };
 
 const $ = (id) => document.getElementById(id);
+
+// Android 对包含 RAW 扩展名的 accept 往往直接打开文件管理器。
+// 改用通用图片 MIME 类型，会优先给出系统图库/照片选择器；桌面仍可选 RAW 文件。
+if (DEVICE.isAndroid) {
+  ['fileAnime', 'filePhoto', 'matchFiles', 'batchFiles'].forEach((id) => {
+    $(id).accept = 'image/*';
+  });
+}
+
 const setStatus = (t) => { $('status').textContent = t; };
 const recentErrors = [];
 function rememberError(where, error) {

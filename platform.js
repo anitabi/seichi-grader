@@ -8,13 +8,16 @@ const matches = (query) => typeof globalThis.matchMedia === 'function' && global
 const isIPhone = /iPhone|iPod/.test(platform) || /iPhone|iPod/.test(ua);
 const isIPad = /iPad/.test(platform) || /iPad/.test(ua) || (platform === 'MacIntel' && touchPoints > 1);
 const isAppleMobile = isIPhone || isIPad;
+// Android 的文件选择器会根据 accept 决定优先打开图库还是文件管理器。
+// 这里仅识别平台，不依赖 Android 具体版本。
+const isAndroid = /Android/i.test(ua);
 const coarse = matches('(pointer: coarse)') || touchPoints > 1;
 const lowMemory = Number.isFinite(nav.deviceMemory) && nav.deviceMemory <= 4;
 const narrow = matches('(max-width: 760px)');
 const isMobile = isAppleMobile || narrow || lowMemory;
 
 const profile = Object.freeze({
-  isIPhone, isIPad, isAppleMobile, isMobile, coarse, lowMemory,
+  isIPhone, isIPad, isAppleMobile, isAndroid, isMobile, coarse, lowMemory,
   previewMax: isIPhone ? 896 : isIPad ? 1100 : isMobile ? 960 : 1400,
   exportMaxPixels: isIPhone ? 8_000_000 : isIPad ? 12_000_000 : lowMemory ? 16_000_000 : 64_000_000,
   exportTile: isMobile ? 512 : 1024,
