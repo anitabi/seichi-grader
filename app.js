@@ -4,7 +4,7 @@ import {
   applyTransfer, applyTransferRegioned, skyMask, makeBloomLayer, applyBloom, extractPalette, generateCubeLUT,
 } from './color.js?v=20260712d';
 import { extractForeground, cutoutCanvas, cleanupAlpha, alphaBBox } from './segment.js';
-import { extractForegroundAI, extractCharactersAI, extractCharactersInRegion, mergeCharacterAlphas } from './ai-segment.js';
+import { mergeCharacterAlphas } from './ai-segment.js';
 import { releaseAllSessions } from './ort-env.js';
 import { embedImage, cosineSimilarity, SCENE_EMBED_MODEL_URL } from './embed.js';
 import { profile as DEVICE } from './platform.js';
@@ -316,7 +316,7 @@ function recompute() {
   redrawComparisonReference();
   syncCanvasSize();
   $('compareModes').hidden = false;
-  ['btnExportImg', 'btnExportCompare', 'btnExportWipe', 'btnExportLut', 'btnBatchExport'].forEach(id => $(id).disabled = false);
+  ['btnExportImg', 'btnExportCompare', 'btnExportWipe', 'btnExportMorph', 'btnExportLut', 'btnBatchExport'].forEach(id => $(id).disabled = false);
   updateWorkflow();
   const modeText = mode === 'tone' ? '影调+色彩' : mode === 'full' ? '完整' : '仅色彩';
   setStatus(`已调色 · ${modeText} · 强度 ${$('strength').value}% · 天空分区：${useRegion ? '已启用' : `未启用（${skyReason}）`}`);
@@ -715,14 +715,16 @@ function applyCharSelection(resetPos) {
   return cov;
 }
 
-function extractCharactersInWorker(imageData, opts = {}) {
+// 模型推理和 1024px 遮罩的预/后处理都不能占用页面主线程。
+// 即便是桌面浏览器也统一交给一次性 Worker，避免用户在等待时点击任何控件就让标签页假死。
+function runAIInWorker(imageData, opts = {}) {
   return new Promise((resolve, reject) => {
     const worker = new Worker('./ai-worker.js', { type: 'module', name: 'seichi-ai-once' });
     worker.onmessage = (event) => {
       const msg = event.data;
       if (msg.type === 'progress') opts.onProgress?.(msg.received, msg.total);
       else if (msg.type === 'stage') opts.onStage?.(msg.text);
-      else if (msg.type === 'done') { worker.terminate(); resolve({ seg: msg.seg, whole: msg.whole }); }
+      else if (msg.type === 'done') { worker.terminate(); resolve(msg.result); }
       else if (msg.type === 'error') {
         worker.terminate();
         const error = new Error(msg.error?.message || 'AI Worker 失败'); error.name = msg.error?.name || 'Error'; error.stack = msg.error?.stack || error.stack;
@@ -730,7 +732,9 @@ function extractCharactersInWorker(imageData, opts = {}) {
       }
     };
     worker.onerror = (event) => { worker.terminate(); reject(new Error(event.message || 'AI Worker 加载失败')); };
-    worker.postMessage({ imageData, hires: !!opts.hires, samFallback: opts.samFallback !== false, mobileModel: !!opts.mobileModel });
+    // 不转移 imageData.data.buffer：主页面仍需拿它显示预览/继续调色。结构化复制只发生一次，
+    // 后续几十秒的推理与数组处理都会留在 Worker 内。
+    worker.postMessage({ imageData, job: opts.job || 'auto', box: opts.box, samPoints: opts.samPoints || [], hires: !!opts.hires, samFallback: opts.samFallback !== false, mobileModel: !!opts.mobileModel });
   });
 }
 
@@ -755,7 +759,7 @@ $('btnExtractAI').addEventListener('click', async () => {
   if (!state.anime) return;
   const btn = $('btnExtractAI');
   state.aiBusy = true;
-  btn.disabled = true; $('btnExtract').disabled = true;
+  btn.disabled = true; $('btnExtract').disabled = true; $('btnLasso').disabled = true;
   $('btnExportImg').disabled = true;
   const onProgress = (recv, total) => {
     $('extractStatus').textContent = `下载模型 ${(recv / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB`;
@@ -763,17 +767,19 @@ $('btnExtractAI').addEventListener('click', async () => {
   const onStage = (s) => { $('extractStatus').textContent = s; };
   try {
     const t0 = performance.now();
-    // 两级流水线：先检测角色框，再逐框抠图
-    const runAI = () => DEVICE.isAppleMobile
-      ? extractCharactersInWorker(state.anime.imgData, { hires: $('hiresDet').checked, samFallback: $('mobileSam').checked, mobileModel: true, onProgress, onStage })
-      : extractCharactersAI(state.anime.imgData, { hires: $('hiresDet').checked, onProgress, onStage }).then((seg) => ({ seg, whole: null }));
+    // 两级流水线：先检测角色框，再逐框抠图。所有平台都在 Worker 内运行。
+    const runAI = () => runAIInWorker(state.anime.imgData, {
+      hires: $('hiresDet').checked,
+      samFallback: DEVICE.isAppleMobile ? $('mobileSam').checked : true,
+      mobileModel: DEVICE.isAppleMobile,
+      onProgress, onStage,
+    });
     let aiResult;
     try {
       aiResult = await runAI();
     } catch (firstError) {
-      // Safari/WASM 在内存压力后偶尔留下不可用会话：只自动重建一次，避免死循环。
-      onStage('释放模型内存并重试一次…');
-      await releaseAllSessions();
+      // 每次 Worker 都是一次性实例；失败后重建一个干净 Worker，只重试一次避免死循环。
+      onStage('重新建立 AI 任务并重试一次…');
       try { aiResult = await runAI(); }
       catch (retryError) { retryError.cause = firstError; throw retryError; }
     }
@@ -795,7 +801,7 @@ $('btnExtractAI').addEventListener('click', async () => {
       // 没检测到角色：回退整图直抠（老行为），风景图会正确报"未找到"
       setCharSeg(null);
       onStage('未检测到角色，改用整图抠取…');
-      const res = whole || await extractForegroundAI(state.anime.imgData, { onProgress, onStage });
+      const res = whole;
       state.rawAlpha = res.alpha; state.rawW = res.width; state.rawH = res.height;
       const cov = applyRefine(true);
       $('extractStatus').textContent = state.cutout
@@ -806,11 +812,8 @@ $('btnExtractAI').addEventListener('click', async () => {
     console.error(e);
     $('extractStatus').textContent = 'AI 抠图失败：' + (e.message || e);
   } finally {
-    // iOS/iPadOS 更容易被 Jetsam；结果已复制成普通数组后释放 Session，
-    // 下次从 Cache Storage 重建，换取连续处理多张时的稳定性。
-    if (DEVICE.isAppleMobile) await releaseAllSessions();
     state.aiBusy = false;
-    btn.disabled = false; $('btnExtract').disabled = false;
+    btn.disabled = false; $('btnExtract').disabled = false; $('btnLasso').disabled = false;
     if (state.gradedData) $('btnExportImg').disabled = false;
     updateModelCacheStatus();
   }
@@ -1412,6 +1415,103 @@ $('btnExportWipe').addEventListener('click', async () => {
   } finally { btn.disabled = false; }
 });
 
+// GIF 使用固定 3-3-2（256 色）调色板：所有浏览器都能直接打开，不依赖外部编码库。
+// 两秒 12 帧、最长边 720px，既能看清渐变，又避免手机导出时拿十几张大图塞满内存。
+function gifColorTable332() {
+  const table = new Uint8Array(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    table[i * 3] = Math.round(((i >> 5) & 7) * 255 / 7);
+    table[i * 3 + 1] = Math.round(((i >> 2) & 7) * 255 / 7);
+    table[i * 3 + 2] = Math.round((i & 3) * 255 / 3);
+  }
+  return table;
+}
+
+function gifLzw(indices) {
+  const clear = 256, end = 257;
+  let codeSize = 9, nextCode = 258, bitBuffer = 0, bitCount = 0;
+  const out = [], dict = new Map();
+  const write = (code) => {
+    bitBuffer |= code << bitCount; bitCount += codeSize;
+    while (bitCount >= 8) { out.push(bitBuffer & 255); bitBuffer >>>= 8; bitCount -= 8; }
+  };
+  const reset = () => { dict.clear(); codeSize = 9; nextCode = 258; };
+  reset(); write(clear);
+  let prefix = indices[0];
+  for (let i = 1; i < indices.length; i++) {
+    const value = indices[i], key = prefix + ',' + value;
+    const known = dict.get(key);
+    if (known != null) { prefix = known; continue; }
+    write(prefix);
+    if (nextCode < 4096) {
+      dict.set(key, nextCode++);
+      if (nextCode === (1 << codeSize) && codeSize < 12) codeSize++;
+    } else { write(clear); reset(); }
+    prefix = value;
+  }
+  write(prefix); write(end);
+  if (bitCount) out.push(bitBuffer & 255);
+  return new Uint8Array(out);
+}
+
+function gifSubBlocks(bytes) {
+  const blocks = [];
+  for (let pos = 0; pos < bytes.length; pos += 255) {
+    const part = bytes.subarray(pos, pos + 255);
+    blocks.push(Uint8Array.of(part.length), part);
+  }
+  blocks.push(Uint8Array.of(0));
+  return blocks;
+}
+
+const gifWord = (n) => Uint8Array.of(n & 255, (n >> 8) & 255);
+const nextPaint = () => new Promise((resolve) => requestAnimationFrame(resolve));
+
+async function makeAnimeToSceneGif() {
+  if (!state.anime || !state.gradedData) throw new Error('请先上传动画截图与实景照片');
+  const source = $('canvasGraded'), scale = Math.min(1, 720 / Math.max(source.width, source.height));
+  const w = Math.max(2, Math.round(source.width * scale)), h = Math.max(2, Math.round(source.height * scale));
+  const anime = document.createElement('canvas'); anime.width = w; anime.height = h;
+  // canvasAnimeOverlay 已按实景画框 cover 裁好，正好和叠加模式相同。
+  anime.getContext('2d').drawImage($('canvasAnimeOverlay'), 0, 0, w, h);
+  const scene = document.createElement('canvas'); scene.width = w; scene.height = h;
+  scene.getContext('2d').drawImage(source, 0, 0, w, h);
+  const frame = document.createElement('canvas'); frame.width = w; frame.height = h;
+  const ctx = frame.getContext('2d');
+  const pieces = [new TextEncoder().encode('GIF89a'), gifWord(w), gifWord(h), Uint8Array.of(0xf7, 0, 0), gifColorTable332()];
+  const frames = 12, delay = Math.round(200 / frames); // 单位 1/100 秒，合计约 2 秒
+  for (let index = 0; index < frames; index++) {
+    const realOpacity = index / (frames - 1);
+    ctx.globalAlpha = 1; ctx.drawImage(anime, 0, 0);
+    ctx.globalAlpha = realOpacity; ctx.drawImage(scene, 0, 0); ctx.globalAlpha = 1;
+    const pixels = ctx.getImageData(0, 0, w, h).data;
+    const indexed = new Uint8Array(w * h);
+    for (let p = 0, i = 0; p < indexed.length; p++, i += 4) indexed[p] = (pixels[i] & 0xe0) | ((pixels[i + 1] & 0xe0) >> 3) | (pixels[i + 2] >> 6);
+    const lzw = gifLzw(indexed);
+    // disposal=1：下一帧直接盖上上一帧；不写循环扩展，GIF 结束在实景画面。
+    pieces.push(Uint8Array.of(0x21, 0xf9, 4, 0x04, delay & 255, (delay >> 8) & 255, 0, 0));
+    pieces.push(Uint8Array.of(0x2c), gifWord(0), gifWord(0), gifWord(w), gifWord(h), Uint8Array.of(0, 8), ...gifSubBlocks(lzw));
+    setStatus(`正在生成动画→实景 GIF · ${index + 1}/${frames}`);
+    await nextPaint();
+  }
+  pieces.push(Uint8Array.of(0x3b));
+  return { blob: new Blob(pieces, { type: 'image/gif' }), width: w, height: h };
+}
+
+$('btnExportMorph').addEventListener('click', async () => {
+  const btn = $('btnExportMorph'); btn.disabled = true;
+  try {
+    const gif = await makeAnimeToSceneGif();
+    const url = URL.createObjectURL(gif.blob);
+    download(url, 'seichi-anime-to-scene.gif');
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setStatus(`已导出 GIF · ${gif.width}×${gif.height} · 约 2 秒 · 动画渐变为实景`);
+  } catch (e) {
+    console.error(e);
+    setStatus('GIF 导出失败：' + (e.message || e));
+  } finally { btn.disabled = false; }
+});
+
 // 批量导出复用当前动画截图、滑杆和预设；逐张渲染/释放，避免同时把多张原图塞进内存。
 $('btnBatchExport').addEventListener('click', () => {
   if (!state.anime) { setStatus('请先上传动画截图'); return; }
@@ -1953,11 +2053,9 @@ async function runLassoBox(box, centroid) {
     $('extractStatus').textContent = `下载模型 ${(recv / 1048576).toFixed(0)}/${(total / 1048576).toFixed(0)}MB`;
   };
   try {
-    const mobileOpts = DEVICE.isAppleMobile
-      ? { isnetModelUrl: './models/isnet-anime-512-fp16.onnx', isnetSize: 512 }
-      : {};
-    const found = await extractCharactersInRegion(state.anime.imgData, box, {
-      ...mobileOpts, samPoints: centroid ? [centroid] : [], onStage, onProgress,
+    const { chars: found } = await runAIInWorker(state.anime.imgData, {
+      job: 'region', box, samPoints: centroid ? [centroid] : [], onStage, onProgress,
+      samFallback: true, mobileModel: DEVICE.isAppleMobile,
     });
     if (!state.charSeg) state.charSeg = { chars: [], included: new Set() };
     const seg = state.charSeg;
@@ -1978,7 +2076,6 @@ async function runLassoBox(box, centroid) {
     $('extractStatus').textContent = '圈选抠图失败：' + (e.message || e);
     return null;
   } finally {
-    if (DEVICE.isAppleMobile) await releaseAllSessions();
     lassoState.busy = false;
     $('btnLassoRun').disabled = !lassoReady();
   }
