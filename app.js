@@ -627,6 +627,25 @@ function refreshCharacterResetButton() {
   $('btnResetCharacter').disabled = state.aiBusy || !hasCharacterWork;
 }
 
+// 三种抠图入口（整图模型 / 圈选模型 / 圈选算法）从同一个干净基线起跑。
+// 这样任一路径留下的候选框、补画、点选和橡皮擦都不会污染下一条路径的结果。
+function prepareIndependentCutout() {
+  closeLasso();
+  state.cutout = null;
+  state.rawAlpha = null; state.rawW = 0; state.rawH = 0; state.finalAlpha = null;
+  state.maskOps = []; state.opsOverlay = null;
+  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 };
+  state.harmonizedCache = null;
+  setCharSeg(null);
+  setCharLock(false);
+  setCharScale(100);
+  $('btnExportCharacter').disabled = true;
+  refreshMaskUndoButtons();
+  refreshAIEntryButtons();
+  redrawComposite();
+  updateWorkflow();
+}
+
 function resetCharacterComposite() {
   if (state.aiBusy) return;
   closeLasso();
@@ -889,12 +908,14 @@ function runAIInWorker(imageData, opts = {}) {
 $('btnExtract').addEventListener('click', () => {
   if (!state.anime) return;
   // 轻量算法不擅长从整幅复杂动画里猜主体；先由用户圈出范围再处理。
+  prepareIndependentCutout();
   openLasso('algorithm');
 });
 
 $('btnExtractAI').addEventListener('click', async () => {
   if (!state.anime) return;
   if (state.aiBusy) { $('extractStatus').textContent = 'AI 任务进行中，请稍候…'; return; }
+  prepareIndependentCutout();
   setAIBusy(true);
   $('btnExportImg').disabled = true;
   const report = (text) => { $('extractStatus').textContent = text; setButtonLoad('loadExtractAI', text); };
@@ -2653,7 +2674,11 @@ async function runLassoBox(box, centroid) {
   }
 }
 
-$('btnLasso').addEventListener('click', openLasso);
+$('btnLasso').addEventListener('click', () => {
+  if (!state.anime) return;
+  prepareIndependentCutout();
+  openLasso('extract');
+});
 $('btnEraseMask').addEventListener('click', () => openLasso('erase'));
 $('btnLassoClose').addEventListener('click', closeLasso);
 $('btnLassoClear').addEventListener('click', () => { lassoState.pts = []; lassoState.keepStrokes = []; $('btnLassoRun').disabled = true; lassoRedraw(); });
