@@ -3,12 +3,12 @@ import {
   imageDataToLab, labStats, makeLabTransform, makeLumaCdfMap, makeGradeTransform,
   applyTransfer, applyTransferRegioned, skyMask, makeBloomLayer, applyBloom, extractPalette, generateCubeLUT,
 } from './color.js?v=20260712d';
-import { extractForeground, cutoutCanvas, cleanupAlpha, alphaBBox, fillNearlyClosedHoles } from './segment.js';
+import { extractForeground, cutoutCanvas, cleanupAlpha, alphaBBox, fillNearlyClosedHoles } from './segment.js?v=20260718-stable-rollback';
 import { mergeCharacterAlphas } from './ai-segment.js';
 import { releaseAllSessions } from './ort-env.js';
 import { embedImage, cosineSimilarity, SCENE_EMBED_MODEL_URL } from './embed.js';
 import { profile as DEVICE } from './platform.js';
-import { launchViewfinder } from './camera/viewfinder.js';
+import { launchViewfinder } from './camera/viewfinder.js?v=20260718-reference-switch';
 
 const IS_MOBILE = DEVICE.isMobile;
 const MAX_DIM = DEVICE.previewMax;
@@ -83,6 +83,8 @@ function updateWorkflow() {
     item.classList.toggle('done', !!complete[key]);
     item.classList.toggle('current', key === current && !complete[key]);
   }
+  // 界面阶段：两张图都到位后进入 edit——素材区收窄、调色控件上浮强调（见 style.css [data-phase]）
+  document.documentElement.dataset.phase = complete.anime && complete.photo ? 'edit' : 'setup';
 }
 
 // 把 File 读成按 MAX_DIM 缩放后的 ImageData。RAW 先抽内嵌 JPEG 预览再解码。
@@ -389,6 +391,27 @@ function syncCanvasSize() {
   }
   const ghost = $('alignGhost');
   if (ghost && !ghost.hidden) { ghost.style.width = w + 'px'; ghost.style.height = h + 'px'; }
+  syncStackCanvasSize();
+}
+
+// “上下”预览把两张完整图片作为一个整体缩放：共用同一显示宽度，
+// 两个画布的边缘直接相接，不再各自在半块面板中居中而留下中缝。
+function syncStackCanvasSize() {
+  const compare = $('compare');
+  if (!compare.classList.contains('compare-stack-mode')) return;
+  const animeCanvas = $('canvasAnimeStack'), gradedCanvas = $('canvasGraded');
+  if (!animeCanvas.width || !animeCanvas.height || !gradedCanvas.width || !gradedCanvas.height) return;
+  const totalHeightPerWidth = animeCanvas.height / animeCanvas.width + gradedCanvas.height / gradedCanvas.width;
+  const width = Math.min(compare.clientWidth, compare.clientHeight / totalHeightPerWidth);
+  const animeHeight = width * animeCanvas.height / animeCanvas.width;
+  const gradedHeight = width * gradedCanvas.height / gradedCanvas.width;
+  for (const [panel, canvas, height] of [
+    [$('stackAnimePanel'), animeCanvas, animeHeight],
+    [$('stackGradedPanel'), gradedCanvas, gradedHeight],
+  ]) {
+    panel.style.width = width + 'px'; panel.style.height = height + 'px';
+    canvas.style.width = width + 'px'; canvas.style.height = height + 'px';
+  }
 }
 
 // 动画截图用于两种“此处 / 彼处”对比：上下模式保持完整比例；叠加模式则居中 cover，
@@ -616,7 +639,7 @@ function refreshAIEntryButtons() {
   $('btnExtract').disabled = busy || !state.anime;
   $('btnExtractAI').disabled = busy || !state.anime;
   $('btnLasso').disabled = busy || !state.anime;
-  $('btnMatchScene').disabled = busy || !state.anime;
+  $('btnMatchScene').disabled = busy || (!state.anime && !state.photo);
   $('btnEraseMask').disabled = busy || !state.cutout;
   refreshCharacterResetButton();
 }
@@ -657,6 +680,7 @@ function resetCharacterComposite() {
   setCharSeg(null);
   $('maskThr').value = 110; $('maskThrVal').textContent = '110';
   $('maskErode').value = 0; $('maskErodeVal').textContent = '0px';
+  $('maskFilter').checked = true; $('maskClose').checked = true;
   $('harmonize').value = 35; $('harmonizeVal').textContent = '35%';
   $('shadow').value = 25; $('shadowVal').textContent = '25%';
   $('shadowOffset').value = 0; $('shadowOffsetVal').textContent = '0%';
@@ -678,7 +702,11 @@ function applyRefine(resetPos) {
   const w = state.rawW, h = state.rawH;
   const thr = parseInt($('maskThr').value, 10);
   const erode = parseInt($('maskErode').value, 10);
-  const clean = cleanupAlpha(state.rawAlpha, w, h, { thr, erode, featherR: 2 });
+  const clean = cleanupAlpha(state.rawAlpha, w, h, {
+    thr, erode, featherR: 2,
+    filter: $('maskFilter').checked,
+    close: $('maskClose').checked,
+  });
   // 手工修补层（补画/点选/擦除的时间序重放结果）盖在算法输出之上
   if (state.opsOverlay?.length === clean.length) {
     const ov = state.opsOverlay;
@@ -771,6 +799,7 @@ async function handlePhotoData(data) {
   state.gradeCache = null;
   exitAlignMode(false);
   $('btnAlign').disabled = !state.anime;
+  refreshAIEntryButtons();
   updateWorkflow();
   setStatus(`照片已读取 · ${data.fromRawPreview ? 'RAW 内嵌预览' : '原图'} ${state.photo.originalWidth}×${state.photo.originalHeight} · 预览 ${data.width}×${data.height}`);
   recompute();
@@ -843,6 +872,7 @@ $('maskErode').addEventListener('input', (e) => {
   const cov = applyRefine(false);
   if (cov != null) $('extractStatus').textContent = `调整中 · 占画面 ${(cov * 100).toFixed(0)}%`;
 });
+['maskFilter', 'maskClose'].forEach((id) => $(id).addEventListener('change', () => applyRefine(false)));
 
 // ---------- AI 检测流水线：角色勾选 ----------
 function setCharSeg(seg) {
@@ -886,7 +916,7 @@ function applyCharSelection(resetPos) {
 // 即便是桌面浏览器也统一交给一次性 Worker，避免用户在等待时点击任何控件就让标签页假死。
 function runAIInWorker(imageData, opts = {}) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker('./ai-worker.js', { type: 'module', name: 'seichi-ai-once' });
+    const worker = new Worker('./ai-worker.js?v=20260718-stable-rollback', { type: 'module', name: 'seichi-ai-once' });
     worker.onmessage = (event) => {
       const msg = event.data;
       if (msg.type === 'progress') opts.onProgress?.(msg.received, msg.total);
@@ -974,6 +1004,7 @@ $('btnExtractAI').addEventListener('click', async () => {
     setAIBusy(false);
     setButtonLoad('loadExtractAI');
     if (state.gradedData) $('btnExportImg').disabled = false;
+    updateWorkflow();
     updateModelCacheStatus();
   }
 });
@@ -1427,7 +1458,8 @@ function makeCompareCanvas(maxWidth = 0, layoutOverride = '') {
   tmpAnime.width = anime.width; tmpAnime.height = anime.height;
   tmpAnime.getContext('2d').putImageData(anime.imgData, 0, 0);
 
-  const gap = 8;
+  // 普通“上下对比”不留装饰缝，两张图片逐像素紧贴；卡片、三联和左右布局仍保留分隔。
+  const gap = layout === 'updown' ? 0 : 8;
   const out = document.createElement('canvas');
   const ctx = out.getContext('2d');
   // 以调色图宽度为基准统一缩放
@@ -1447,9 +1479,9 @@ function makeCompareCanvas(maxWidth = 0, layoutOverride = '') {
     const header = Math.round(W * .20), footer = place ? Math.round(W * .10) : Math.round(W * .045);
     out.width = W;
     out.height = header + panels.reduce((s, p) => s + p.h, 0) + gap + footer;
-    ctx.fillStyle = '#0e1014'; ctx.fillRect(0, 0, out.width, out.height);
-    ctx.fillStyle = '#ff5e8a'; ctx.fillRect(0, 0, W, Math.max(4, Math.round(W / 100)));
-    ctx.fillStyle = '#f2f4f8'; ctx.font = `600 ${Math.round(W / 19)}px sans-serif`; ctx.textBaseline = 'top';
+    ctx.fillStyle = '#10130c'; ctx.fillRect(0, 0, out.width, out.height);
+    ctx.fillStyle = '#007ea7'; ctx.fillRect(0, 0, W, Math.max(4, Math.round(W / 100)));
+    ctx.fillStyle = '#f2f4ea'; ctx.font = `600 ${Math.round(W / 19)}px sans-serif`; ctx.textBaseline = 'top';
     ctx.fillText(title, Math.round(W * .06), Math.round(W * .055), Math.round(W * .88));
     let y = header;
     panels.forEach((p, i) => {
@@ -1460,19 +1492,19 @@ function makeCompareCanvas(maxWidth = 0, layoutOverride = '') {
       y += p.h + gap;
     });
     if (place) {
-      ctx.fillStyle = '#aeb7c8'; ctx.font = `${Math.round(W / 34)}px sans-serif`;
+      ctx.fillStyle = '#b3bca4'; ctx.font = `${Math.round(W / 34)}px sans-serif`;
       ctx.fillText(place, Math.round(W * .06), y + Math.round(W * .025), Math.round(W * .88));
     }
   } else if (layout === 'leftright') {
     const H = Math.max(...panels.map(p => p.h));
     out.width = W * panels.length + gap * (panels.length - 1);
     out.height = H;
-    ctx.fillStyle = '#0e1014'; ctx.fillRect(0, 0, out.width, out.height);
+    ctx.fillStyle = '#10130c'; ctx.fillRect(0, 0, out.width, out.height);
     panels.forEach((p, i) => ctx.drawImage(p.cv, i * (W + gap), 0, W, p.h));
   } else { // updown / triple 纵向
     out.width = W;
     out.height = panels.reduce((s, p) => s + p.h, 0) + gap * (panels.length - 1);
-    ctx.fillStyle = '#0e1014'; ctx.fillRect(0, 0, out.width, out.height);
+    ctx.fillStyle = '#10130c'; ctx.fillRect(0, 0, out.width, out.height);
     let y = 0;
     panels.forEach((p) => { ctx.drawImage(p.cv, 0, y, W, p.h); y += p.h + gap; });
   }
@@ -1946,10 +1978,11 @@ $('batchFiles').addEventListener('change', async (event) => {
   }
 });
 
-// ---------- 找最像的实景（场景嵌入匹配，见 embed.js） ----------
+// ---------- 双向对应图匹配（动画→实景 / 实景→动画，场景嵌入见 embed.js） ----------
 // 逐张「解码→编码→释放」，保留所有轻量缩略图与 File 引用供用户横向比较；
 // 原图像素在每轮比对后立即释放，仍受 60 张上限保护手机内存。
 const MATCH_MAX_FILES = 60;
+let matchReverse = false;
 
 function makeMatchThumb(imgData, maxSide = 220) {
   const scale = Math.min(1, maxSide / Math.max(imgData.width, imgData.height));
@@ -1978,9 +2011,22 @@ async function useMatchedPhoto(entry, item) {
   } catch (e) { setStatus('读取失败：' + (e.message || e)); }
 }
 
-function renderMatchResults(ranked) {
+async function useMatchedAnime(entry, item) {
+  try {
+    setStatus('读取选中的动画截图…');
+    const data = await fileToImageData(entry.file);
+    $('thumbAnime').src = data.url; $('thumbAnime').hidden = false;
+    await handleAnimeData(data);
+    [...$('matchGrid').children].forEach((el) => el.classList.toggle('selected', el === item));
+  } catch (e) { setStatus('读取失败：' + (e.message || e)); }
+}
+
+function renderMatchResults(ranked, reverse = false) {
   const grid = $('matchGrid');
   grid.textContent = '';
+  $('matchResultsLabel').textContent = reverse
+    ? '全部动画截图已按相似度排序；左右滑动并点选作为动画截图'
+    : '全部实景照片已按相似度排序；左右滑动并点选作为实景照片';
   ranked.forEach((entry, index) => {
     const item = document.createElement('button');
     item.type = 'button';
@@ -1990,22 +2036,25 @@ function renderMatchResults(ranked) {
     const label = document.createElement('span');
     label.textContent = `#${index + 1} · ${Math.max(0, Math.round(entry.sim * 100))}%`;
     item.appendChild(label);
-    item.addEventListener('click', () => useMatchedPhoto(entry, item));
+    item.addEventListener('click', () => reverse ? useMatchedAnime(entry, item) : useMatchedPhoto(entry, item));
     grid.appendChild(item);
   });
   $('matchResults').hidden = !ranked.length;
 }
 
 $('btnMatchScene').addEventListener('click', () => {
-  if (!state.anime) { setStatus('请先上传动画截图'); return; }
+  if (!state.anime && !state.photo) { setStatus('请先放入一张动画截图或实景照片作为匹配参考'); return; }
   if (state.aiBusy) { setStatus('AI 任务进行中，请稍候…'); return; }
+  // 常规：动画 → 多张实景；只放了实景时自动反向：实景 → 多张动画。
+  matchReverse = !state.anime && !!state.photo;
   $('matchFiles').value = '';
   $('matchFiles').click();
 });
 
 $('matchFiles').addEventListener('change', async (event) => {
   const files = [...event.target.files].slice(0, MATCH_MAX_FILES);
-  if (!files.length || !state.anime) return;
+  const queryImage = matchReverse ? state.photo?.imgData : state.anime?.imgData;
+  if (!files.length || !queryImage) return;
   // 找图的嵌入模型跑在主线程 ORT；与抠像 Worker 的 ORT 堆互斥，防止双堆并存挤爆内存
   if (state.aiBusy) { setStatus('AI 任务进行中，请稍候…'); return; }
   setAIBusy(true);
@@ -2014,7 +2063,7 @@ $('matchFiles').addEventListener('change', async (event) => {
   try {
     report('准备模型…');
     const fmtMB = (n) => (n / 1048576).toFixed(1);
-    const query = await embedImage(state.anime.imgData, {
+    const query = await embedImage(queryImage, {
       onProgress: (r, t) => report(`下载 ${fmtMB(r)}/${fmtMB(t)}MB`),
     });
     const ranked = [];
@@ -2035,10 +2084,10 @@ $('matchFiles').addEventListener('change', async (event) => {
       }
     }
     ranked.sort((a, b) => b.sim - a.sim);
-    renderMatchResults(ranked);
+    renderMatchResults(ranked, matchReverse);
     setStatus(compared
-      ? `找图完成：共比对 ${compared} 张${failed ? `，${failed} 张读取失败（${failReason}）` : ''}${event.target.files.length > MATCH_MAX_FILES ? `（超过 ${MATCH_MAX_FILES} 张的部分未参加）` : ''}，点选最像的一张`
-      : `找图失败：所选照片都无法读取（${failReason}）`);
+      ? `${matchReverse ? '反向匹配动画' : '匹配实景'}完成：共比对 ${compared} 张${failed ? `，${failed} 张读取失败（${failReason}）` : ''}${event.target.files.length > MATCH_MAX_FILES ? `（超过 ${MATCH_MAX_FILES} 张的部分未参加）` : ''}，点选最像的一张`
+      : `匹配失败：所选图片都无法读取（${failReason}）`);
   } catch (e) {
     console.error(e); rememberError('scene-match', e);
     setStatus('找图匹配失败：' + (e.message || e));
@@ -2167,7 +2216,7 @@ $('btnSunlight').addEventListener('click', () => {
 try { if (localStorage.getItem(SUNLIGHT_KEY) === '1') setSunlight(true); } catch { /* 忽略 */ }
 
 // ---------- 模型持久缓存状态 ----------
-const MODEL_CACHE = 'seichi-models-v2';
+const MODEL_CACHE = 'seichi-models-v4';
 // 运行时实际读取 ISNet 的三个分块（见 ort-env.js），不是同名的整文件。
 // 因此离线包也只缓存分块，避免把同一模型下载两遍。
 const ISNET_URL = DEVICE.isAppleMobile ? './models/isnet-anime-512-fp16.onnx' : './models/isnet-anime-fp16.onnx';
@@ -2379,6 +2428,9 @@ const lassoState = {
   keepMode: false, keepDrawing: false, keepStrokes: [], eraseDrawing: false, eraseStroke: null, stage: 'select', maskOverlay: null,
   pickMode: false,   // 第二步「点选补块」：点一下暗蒙版，把整块连通色域并入目标
   refineBox: null,   // 第一步圈选的 bbox，点选补块只在框内生效
+  fillMode: false, fillDrawing: false, fillPts: [], // 「磁性描边」：随手描一段，吸附到线稿
+  snapContour: null,                                // 已吸附待确认的闭合轮廓（确认后才锁定内部）
+  edgeCost: null, edgeG: null, edgeCostFor: null,   // 边缘代价图缓存（按 state.anime 复用）
 };
 
 function lassoReady() {
@@ -2389,15 +2441,21 @@ function lassoReady() {
 
 function updateLassoTip() {
   if (lassoState.mode === 'erase') {
-    $('lassoTip').textContent = '亮着的是已识别目标；调好橡皮大小后，按住拖过亮起部分即可擦除并加回暗蒙版';
+    $('lassoTip').textContent = lassoState.fillMode
+      ? '描边擦除：把它当画笔用——像涂鸦一样，手指沿要删掉部件的轮廓涂一圈（不必准、不必封口）；松手自动吸附到线稿，确认后圈内目标整片擦掉'
+      : lassoState.pickMode
+        ? '点擦整块：点一下亮着的目标（脸、手、衣角），整块颜色相近的区域会一起被擦掉'
+        : '亮着的是已识别目标；调好橡皮大小后，按住拖过亮起部分即可擦除；或用「点擦整块 / 描边擦除」';
     return;
   }
   if (lassoState.stage === 'refine') {
     $('lassoTip').textContent = lassoState.keepMode
       ? '补画：刷过的部分会立刻取消暗蒙版，并入识别目标'
       : lassoState.pickMode
-        ? '点选补块：点一下蒙版里的暗块（脸、手、衣角），整块颜色相近的区域会一起并入目标'
-        : '识别结果以外的区域已蒙版；漏掉的脸、手可用「点选补块」整块补回，细碎处用画笔刷开蒙版';
+        ? '点选补块：点一下暗块里的脸颊/手臂等大片色块，整块（含包住的眼睛嘴巴）会一起补入目标'
+        : lassoState.fillMode
+          ? '磁性描边：把它当画笔用——像涂鸦一样，手指沿要补回部件的轮廓涂一圈（不必准、不必封口）；松手自动吸附到线稿，确认后圈内不论颜色一律并入目标'
+          : '识别结果以外的区域已蒙版；漏掉的脸、手可用「点选补块 / 磁性描边」补回，细碎处用画笔刷开蒙版';
     return;
   }
   if (lassoState.keepMode) {
@@ -2441,8 +2499,8 @@ function lassoRedraw() {
   if (lassoState.stage === 'select' && lassoState.pts.length > 1) {
     ctx.save();
     ctx.lineWidth = Math.max(2, c.width / 350);
-    ctx.strokeStyle = 'rgba(255,80,140,.95)';
-    ctx.fillStyle = 'rgba(255,80,140,.14)';
+    ctx.strokeStyle = 'rgba(0, 126, 167,.95)';
+    ctx.fillStyle = 'rgba(0, 126, 167,.14)';
     ctx.beginPath();
     ctx.moveTo(lassoState.pts[0][0], lassoState.pts[0][1]);
     for (let i = 1; i < lassoState.pts.length; i++) ctx.lineTo(lassoState.pts[i][0], lassoState.pts[i][1]);
@@ -2465,6 +2523,37 @@ function lassoRedraw() {
     }
     ctx.restore();
   }
+  if (lassoState.fillPts.length > 1) {
+    ctx.save();
+    // 磁性描边的实时笔迹：显示手指原始描线，松手后才吸附到线稿并闭合。
+    const erasing = lassoState.mode === 'erase';
+    ctx.lineWidth = Math.max(2, c.width / 400);
+    ctx.strokeStyle = erasing ? 'rgba(0,0,0,.8)' : 'rgba(0, 167, 225,.95)';
+    ctx.fillStyle = erasing ? 'rgba(0,0,0,.22)' : 'rgba(0, 167, 225,.20)';
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const fp = lassoState.fillPts;
+    ctx.beginPath(); ctx.moveTo(fp[0][0], fp[0][1]);
+    for (let i = 1; i < fp.length; i++) ctx.lineTo(fp[i][0], fp[i][1]);
+    ctx.closePath(); ctx.fill();
+    ctx.stroke();
+    // 起点→末点的闭合段用虚线，提示“不必手动封口”。
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath(); ctx.moveTo(fp[fp.length - 1][0], fp[fp.length - 1][1]); ctx.lineTo(fp[0][0], fp[0][1]); ctx.stroke();
+    ctx.restore();
+  }
+  if (lassoState.snapContour && lassoState.snapContour.length > 2) {
+    ctx.save();
+    // 已吸附到线稿的闭合轮廓：青色实线 + 半透明填充，等用户确认锁定。
+    const sc = lassoState.snapContour;
+    ctx.lineWidth = Math.max(2.5, c.width / 340);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(0, 200, 190, .98)';
+    ctx.fillStyle = lassoState.mode === 'erase' ? 'rgba(0,0,0,.24)' : 'rgba(0, 200, 190, .24)';
+    ctx.beginPath(); ctx.moveTo(sc[0][0], sc[0][1]);
+    for (let i = 1; i < sc.length; i++) ctx.lineTo(sc[i][0], sc[i][1]);
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
   if (lassoState.eraseStroke) {
     const stroke = lassoState.eraseStroke;
     ctx.save();
@@ -2484,16 +2573,26 @@ function updateKeepBrushUI() {
   const erasing = lassoState.mode === 'erase';
   const canUndoHere = available || erasing;
   $('btnLassoKeep').hidden = !available;
-  $('btnLassoPick').hidden = !available;
+  // 点选、磁性描边两个按钮在「补块 refine」和「擦除」两种场景都出现，只是语义相反。
+  $('btnLassoPick').hidden = !available && !erasing;
+  $('btnLassoPick').textContent = erasing ? '👆 点擦整块' : '👆 点选补块';
+  $('btnLassoFill').hidden = !available && !erasing;
+  $('btnLassoFill').textContent = erasing ? '🧲 描边擦除' : '🧲 磁性描边';
+  // 描边吸附后出现「锁定此轮廓」确认；未吸附或非描边模式则隐藏。
+  $('btnLassoFillConfirm').hidden = !(lassoState.fillMode && lassoState.snapContour);
+  $('btnLassoFillConfirm').textContent = erasing ? '✓ 锁定擦除' : '✓ 锁定此轮廓';
   // 橡皮擦同样是可逆编辑：撤销必须留在当前弹窗内，而不是让用户回控制面板找。
   $('btnLassoUndo').hidden = !canUndoHere;
   $('btnLassoUndo').disabled = !state.maskOps.length;
-  $('lassoKeepSize').hidden = erasing ? false : !available || !lassoState.keepMode;
+  // 擦除时：笔刷模式才需要橡皮大小，点擦/圈内模式用不到就收起。
+  $('lassoKeepSize').hidden = erasing ? (lassoState.pickMode || lassoState.fillMode) : !available || !lassoState.keepMode;
   $('lassoBrushSizeLabel').textContent = erasing ? '橡皮大小' : '画笔粗细';
   $('btnLassoKeep').classList.toggle('keep-on', lassoState.keepMode);
   $('btnLassoKeep').setAttribute('aria-pressed', String(lassoState.keepMode));
   $('btnLassoPick').classList.toggle('keep-on', lassoState.pickMode);
   $('btnLassoPick').setAttribute('aria-pressed', String(lassoState.pickMode));
+  $('btnLassoFill').classList.toggle('keep-on', lassoState.fillMode);
+  $('btnLassoFill').setAttribute('aria-pressed', String(lassoState.fillMode));
   $('lassoShapes').hidden = lassoState.stage === 'refine' || erasing;
   $('btnLassoRun').hidden = erasing;
   $('btnLassoClear').hidden = lassoState.stage === 'refine' || erasing;
@@ -2519,6 +2618,7 @@ function openLasso(mode = 'extract') {
   lassoState.eraseDrawing = false; lassoState.eraseStroke = null;
   lassoState.stage = 'select'; lassoState.maskOverlay = null;
   lassoState.pickMode = false; lassoState.refineBox = null;
+  lassoState.fillMode = false; lassoState.fillDrawing = false; lassoState.fillPts = []; lassoState.snapContour = null;
   lassoState.mode = mode;
   // 橡皮擦不是重新“选目标”：打开即展示当前目标，未选部分保持暗蒙版。
   if (mode === 'erase') rebuildLassoMaskOverlay();
@@ -2553,6 +2653,98 @@ function selectedIndicesInStroke(stroke) {
   return idx;
 }
 
+// 取「已吸附闭合轮廓」内部的所有像素。轮廓来自 magneticSnap（已贴到真实线稿并闭合），
+// 这里只负责按 nonzero 填充规则光栅化、把内部像素收集成 idx。
+//   erase=false：轮廓内一律并入目标（锁定线稿围出的整块部件，不再看颜色）；
+//   erase=true ：轮廓内只取当前已是目标(alpha>8)的像素，语义与橡皮笔刷一致，不误擦背景。
+function contourInteriorIndices(pts, { erase = false } = {}) {
+  const w = state.rawW, h = state.rawH, alpha = state.finalAlpha;
+  if (!w || !h || !pts || pts.length < 3) return [];
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath(); ctx.fill();
+  const painted = ctx.getImageData(0, 0, w, h).data;
+  const idx = [];
+  for (let i = 0, p = 3; i < w * h; i++, p += 4) {
+    if (!painted[p]) continue;
+    if (erase && (!alpha || alpha[i] <= 8)) continue;
+    idx.push(i);
+  }
+  return idx;
+}
+
+// ---------- 磁性描边（逐点就近吸附）----------
+// 图片里的线稿本身就是现成轮廓。用户像用笔刷一样沿某条线稿粗略描一段，我们把描线的
+// 每个点就近吸到最近的真实线稿上，保留用户的走线拓扑，只是「吸紧」到线上。
+// （早期用过全局 livewire/Dijkstra，但在动画线稿上会为贴强边而乱窜成锯齿、还窜到旁边
+//  的别的线——实测很糟，已弃用，改这套稳定的就近吸附。）
+
+// 边缘幅值图：Sobel 梯度幅值。edgeG 供本吸附 + growRegionAt 的线稿卵墙共用，edgeMax 存最强值。按 anime 缓存。
+function ensureEdgeCost() {
+  if (lassoState.edgeCostFor === state.anime && lassoState.edgeCost) return lassoState.edgeCost;
+  const w = state.anime.width, h = state.anime.height, d = state.anime.imgData.data;
+  const lum = new Float32Array(w * h);
+  for (let i = 0, p = 0; i < w * h; i++, p += 4) lum[i] = 0.299 * d[p] + 0.587 * d[p + 1] + 0.114 * d[p + 2];
+  const g = new Float32Array(w * h);
+  let maxg = 1e-6;
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x;
+    const gx = -lum[i - 1 - w] - 2 * lum[i - 1] - lum[i - 1 + w] + lum[i + 1 - w] + 2 * lum[i + 1] + lum[i + 1 + w];
+    const gy = -lum[i - w - 1] - 2 * lum[i - w] - lum[i - w + 1] + lum[i + w - 1] + 2 * lum[i + w] + lum[i + w + 1];
+    const m = Math.sqrt(gx * gx + gy * gy);
+    g[i] = m; if (m > maxg) maxg = m;
+  }
+  const cost = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) { const e = g[i] / maxg; cost[i] = 0.02 + (1 - e) * (1 - e); }
+  lassoState.edgeCost = cost; lassoState.edgeG = g; lassoState.edgeMax = maxg; lassoState.edgeCostFor = state.anime;
+  return cost;
+}
+
+// 逐点就近吸附：在半径 R 内选【离原点最近】且够浓(g>T)的线稿像素。关键是「就近」而非
+// 「最强」——描线附近若有更浓的别的线（头发/冰棍），最强会跳错线，就近则始终咬住用户
+// 描的那一条。半径内够不到线稿就保留原点（像笔刷一样直穿空白）。
+function snapNearestEdge(x, y, g, w, h, R, T) {
+  const cx = Math.round(x), cy = Math.round(y);
+  let bx = cx, by = cy, bestD = Infinity;
+  for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+    const nx = cx + dx, ny = cy + dy;
+    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+    if (g[ny * w + nx] <= T) continue;
+    const dd = dx * dx + dy * dy;
+    if (dd < bestD) { bestD = dd; bx = nx; by = ny; }
+  }
+  return [bx, by];
+}
+
+// 用户原始笔迹 → 重采样 → 逐点就近吸附到线稿 → 轻微平滑。保留用户走线，只吸紧到线上。
+function magneticSnap(rawPts) {
+  if (!state.anime || !rawPts || rawPts.length < 3) return null;
+  const w = state.anime.width, h = state.anime.height;
+  ensureEdgeCost();
+  const g = lassoState.edgeG, T = 0.35 * lassoState.edgeMax, R = 10;
+  // 1) 重采样每 ~4px，让吸附点分布均匀
+  const dense = [rawPts[0]];
+  for (let i = 1; i < rawPts.length; i++) {
+    const a = rawPts[i - 1], b = rawPts[i], d = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const n = Math.max(1, Math.round(d / 4));
+    for (let k = 1; k <= n; k++) dense.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
+  }
+  if (dense.length < 3) return null;
+  // 2) 逐点就近吸附
+  const snapped = dense.map((p) => snapNearestEdge(p[0], p[1], g, w, h, R, T));
+  // 3) 移动平均平滑（窗口 ±2），去掉像素级抖动
+  const sm = [];
+  for (let i = 0; i < snapped.length; i++) {
+    let sx = 0, sy = 0, c = 0;
+    for (let k = -2; k <= 2; k++) { const j = i + k; if (j < 0 || j >= snapped.length) continue; sx += snapped[j][0]; sy += snapped[j][1]; c++; }
+    sm.push([sx / c, sy / c]);
+  }
+  return sm.length >= 3 ? sm : null;
+}
+
 function closeLasso() { $('lassoModal').hidden = true; }
 
 function extractAlgorithmInRegion(box) {
@@ -2571,41 +2763,105 @@ function extractAlgorithmInRegion(box) {
   };
 }
 
-// 点选补块：以点击处为种子，在「未被识别(finalAlpha 低) ∩ 颜色相近 ∩ 第一步粉框内」
-// 的约束下做 BFS——动画是平涂，这样一次就能圈出整张脸/整只手这样的语义色块。
-function pickRegionAt(x, y) {
+// 点一下就整块选中。核心是两把「色差尺子」+ 一道「线稿卵墙」，专治动画的赛璐璐上色：
+//   ① 相邻像素色差（STEP2）——只要挨着的两个像素颜色接近就继续长。赛璐璐的
+//      「亮部→阴影」是一道柔和的小台阶（≈55），跨得过去；于是点亮部脸颊能一路
+//      长到阴影里，拿到「整张脸的皮肤」而不是只有受光那半边（老算法只跟种子比，
+//      42 的容差跨不过阴影带，这正是「点一下只有超级小一块」的根因）。
+//   ② 与种子的总色差（GLOBAL2）——防止顺着线稿的抗锯齿渐变一路漏进黑线/背景。
+//      线稿是硬边（跳变≈180），总色差一超上限就被挡住，生长干净地停在轮廓上。
+//   ③ 线稿卵墙（edge>wall）——碰到够浓的部件外轮廓就停。颜色挡得住时它不多事；
+//      但「颜色接着走可该停」处（同色相邻部件、下颌/发际线，尤其暗肤色顺阴影漏成
+//      一大片：实测点裙子暗处 7万→1万）由它兜住。阈值卡在阴影线之上、外轮廓之下。
+// 生长完再把区域内被完全包住的「孔洞」（眼睛/嘴/纽扣/发饰）一并吞掉——所以点
+// 脸颊能得到整张脸，而不是一张挖了眼睛嘴巴的皮。
+//   erase=false：在未识别区(alpha<128)里长，用于「点选补块」把漏掉的整块补回；
+//   erase=true ：在已识别目标(alpha>=128)里长，用于「点一下擦整块」。
+function growRegionAt(x, y, { erase = false } = {}) {
   const w = state.rawW, h = state.rawH;
-  const box = lassoState.refineBox;
-  if (!state.finalAlpha || state.finalAlpha.length !== w * h || !box || !state.anime) return null;
+  const alpha = state.finalAlpha;
+  if (!alpha || alpha.length !== w * h || !state.anime) return null;
+  // 补块只在第一步粉框内生效；擦除没有粉框，放开到整幅（靠 alpha 目标域自然收边）。
+  const box = erase ? { x: 0, y: 0, w, h } : lassoState.refineBox;
+  if (!box) return null;
   const px = Math.round(x), py = Math.round(y);
   if (px < box.x || py < box.y || px >= box.x + box.w || py >= box.y + box.h) return { reason: 'outside' };
   const seed = py * w + px;
-  if (state.finalAlpha[seed] > 127) return { reason: 'already' };
+  // 生长域：擦除只在目标(alpha≥128)里、补块只在非目标(alpha<128)里；抗锯齿边(8~127)天然成界。
+  const inDomain = erase ? (i) => alpha[i] >= 128 : (i) => alpha[i] < 128;
+  if (erase && alpha[seed] < 128) return { reason: 'notarget' };
+  if (!erase && alpha[seed] >= 128) return { reason: 'already' };
   const d = state.anime.imgData.data;
   const sr = d[seed * 4], sg = d[seed * 4 + 1], sb = d[seed * 4 + 2];
-  const TOL2 = 42 * 42; // 平涂色块内色差很小；跨线稿/异色块会被挡住
-  const maxArea = Math.round(box.w * box.h * 0.4); // 安全上限：不许一口吃掉小半个圈选框
+  const STEP2 = 70 * 70;     // 相邻色差上限：跨得过赛璐璐阴影，挡得住线稿硬边
+  const GLOBAL2 = 118 * 118; // 与种子总色差上限：防止顺着抗锯齿渐变漏出轮廓
+  // 线稿卵墙：碰到「浓到够当部件外轮廓」的边缘就停。颜色能挡住的地方它不多事，
+  // 但「颜色接着走、可该停」的地方（同色相邻部件、下颌/发际线，尤其暗肤色顺着阴影
+  // 漏成一大片）由它兜住。阈值卡在赛璐璐阴影线之上、部件外轮廓之下（实测 0.20*最强边缘）。
+  ensureEdgeCost();
+  const edge = lassoState.edgeG, wall = 0.20 * lassoState.edgeMax;
+  const maxArea = Math.round(box.w * box.h * (erase ? 0.92 : 0.7));
   const visited = new Uint8Array(w * h);
-  const stack = [seed]; visited[seed] = 1;
-  const idx = [];
+  const inRegion = new Uint8Array(w * h);
+  const stack = [seed]; visited[seed] = 1; inRegion[seed] = 1;
+  const idx = [seed];
+  let minX = px, maxX = px, minY = py, maxY = py;
   while (stack.length) {
     const i = stack.pop();
-    idx.push(i);
-    if (idx.length > maxArea) return { reason: 'toobig' };
     const ix = i % w, iy = (i / w) | 0;
+    const cr = d[i * 4], cg = d[i * 4 + 1], cb = d[i * 4 + 2];
     for (const n of [ix > 0 ? i - 1 : -1, ix < w - 1 ? i + 1 : -1, iy > 0 ? i - w : -1, iy < h - 1 ? i + w : -1]) {
       if (n < 0 || visited[n]) continue;
       const nx = n % w, ny = (n / w) | 0;
       if (nx < box.x || ny < box.y || nx >= box.x + box.w || ny >= box.y + box.h) continue;
       visited[n] = 1;
-      if (state.finalAlpha[n] > 127) continue; // 已是目标 → 连通域边界
-      const p = n * 4;
-      const dr = d[p] - sr, dg = d[p + 1] - sg, db = d[p + 2] - sb;
-      if (dr * dr + dg * dg + db * db > TOL2) continue; // 颜色魔棒约束
-      stack.push(n);
+      if (!inDomain(n)) continue; // 越过目标/非目标边界即停
+      if (edge[n] > wall) continue; // 撞上浓线稿（部件外轮廓）即停
+      const p = n * 4, nr = d[p], ng = d[p + 1], nb = d[p + 2];
+      const l0 = nr - cr, l1 = ng - cg, l2 = nb - cb;
+      if (l0 * l0 + l1 * l1 + l2 * l2 > STEP2) continue;       // 相邻色差（跨阴影）
+      const g0 = nr - sr, g1 = ng - sg, g2 = nb - sb;
+      if (g0 * g0 + g1 * g1 + g2 * g2 > GLOBAL2) continue;     // 总色差（挡线稿）
+      inRegion[n] = 1; idx.push(n); stack.push(n);
+      if (nx < minX) minX = nx; if (nx > maxX) maxX = nx;
+      if (ny < minY) minY = ny; if (ny > maxY) maxY = ny;
+      if (idx.length > maxArea) return { reason: 'toobig' };
     }
   }
+  fillEnclosedHoles(inRegion, idx, w, box, minX, minY, maxX, maxY);
   return { idx: Uint32Array.from(idx) };
+}
+
+// 从生长区域的包围盒边界向内灌水：灌得到的是外部空隙，灌不到又不在区域里的像素
+// 就是被区域完全包住的孔洞（眼睛/嘴/纽扣），并入区域。这样「点皮肤→整张脸」。
+function fillEnclosedHoles(inRegion, idx, w, box, minX, minY, maxX, maxY) {
+  const rx0 = Math.max(box.x, minX), ry0 = Math.max(box.y, minY);
+  const rx1 = Math.min(box.x + box.w - 1, maxX), ry1 = Math.min(box.y + box.h - 1, maxY);
+  const rw = rx1 - rx0 + 1, rh = ry1 - ry0 + 1;
+  if (rw <= 2 || rh <= 2) return;
+  const outside = new Uint8Array(rw * rh);
+  const st = [];
+  const seedBorder = (gx, gy) => {
+    const li = (gy - ry0) * rw + (gx - rx0);
+    if (!outside[li] && !inRegion[gy * w + gx]) { outside[li] = 1; st.push(li); }
+  };
+  for (let gx = rx0; gx <= rx1; gx++) { seedBorder(gx, ry0); seedBorder(gx, ry1); }
+  for (let gy = ry0; gy <= ry1; gy++) { seedBorder(rx0, gy); seedBorder(rx1, gy); }
+  while (st.length) {
+    const li = st.pop(), lx = li % rw, ly = (li / rw) | 0;
+    for (const nl of [lx > 0 ? li - 1 : -1, lx < rw - 1 ? li + 1 : -1, ly > 0 ? li - rw : -1, ly < rh - 1 ? li + rw : -1]) {
+      if (nl < 0 || outside[nl]) continue;
+      const gx = rx0 + (nl % rw), gy = ry0 + ((nl / rw) | 0);
+      if (inRegion[gy * w + gx]) continue;
+      outside[nl] = 1; st.push(nl);
+    }
+  }
+  for (let ly = 0; ly < rh; ly++) for (let lx = 0; lx < rw; lx++) {
+    if (outside[ly * rw + lx]) continue;
+    const gi = (ry0 + ly) * w + (rx0 + lx);
+    if (inRegion[gi]) continue;
+    inRegion[gi] = 1; idx.push(gi); // 被包住的孔洞
+  }
 }
 
 // 圈选核心：模型模式走 Worker；算法模式只处理圈选区域，避免把整幅画面当作主体猜。
@@ -2684,14 +2940,44 @@ $('btnLassoClear').addEventListener('click', () => { lassoState.pts = []; lassoS
 $('btnLassoKeep').addEventListener('click', () => {
   if (lassoState.mode === 'erase' || lassoState.stage !== 'refine') return;
   lassoState.keepMode = !lassoState.keepMode;
-  lassoState.pickMode = false;
+  lassoState.pickMode = false; lassoState.fillMode = false; lassoState.fillPts = []; lassoState.snapContour = null;
   updateLassoTip(); updateKeepBrushUI(); lassoRedraw();
 });
 $('btnLassoPick').addEventListener('click', () => {
-  if (lassoState.mode === 'erase' || lassoState.stage !== 'refine') return;
+  // 擦除模式下也可切到「点擦整块」；补块模式下只在 refine 阶段可用。
+  if (lassoState.mode !== 'erase' && lassoState.stage !== 'refine') return;
   lassoState.pickMode = !lassoState.pickMode;
-  lassoState.keepMode = false;
+  lassoState.keepMode = false; lassoState.fillMode = false; lassoState.fillPts = []; lassoState.snapContour = null;
   updateLassoTip(); updateKeepBrushUI(); lassoRedraw();
+});
+$('btnLassoFill').addEventListener('click', () => {
+  // 磁性描边：擦除模式随时可用；补块模式只在 refine 阶段可用。
+  if (lassoState.mode !== 'erase' && lassoState.stage !== 'refine') return;
+  lassoState.fillMode = !lassoState.fillMode;
+  lassoState.keepMode = false; lassoState.pickMode = false;
+  if (!lassoState.fillMode) { lassoState.fillPts = []; lassoState.snapContour = null; }
+  updateLassoTip(); updateKeepBrushUI(); lassoRedraw();
+});
+$('btnLassoFillConfirm').addEventListener('click', () => {
+  const snap = lassoState.snapContour;
+  if (!snap) return;
+  const erasing = lassoState.mode === 'erase';
+  const idx = contourInteriorIndices(snap, { erase: erasing });
+  lassoState.snapContour = null;
+  if (!idx.length) {
+    $('extractStatus').textContent = '这条轮廓围出的范围太小或没套到目标——重新描一遍';
+    updateKeepBrushUI(); lassoRedraw(); return;
+  }
+  if (erasing) {
+    const coverage = pushMaskOp({ type: 'erase', idx });
+    rebuildLassoMaskOverlay();
+    $('extractStatus').textContent = `已锁定擦除轮廓内 ${idx.length.toLocaleString()} 个目标像素 · 当前角色占画面 ${((coverage || 0) * 100).toFixed(0)}% · 可撤销`;
+  } else {
+    pushMaskOp({ type: 'keepRegion', idx: Uint32Array.from(idx) });
+    rebuildLassoMaskOverlay();
+    $('extractStatus').textContent = `已锁定轮廓内 ${idx.length.toLocaleString()} 个像素 · 可继续描边或撤销`;
+  }
+  updateKeepBrushUI(); lassoRedraw();
 });
 $('btnLassoUndo').addEventListener('click', undoMaskOp);
 $('btnMaskUndo').addEventListener('click', undoMaskOp);
@@ -2738,7 +3024,15 @@ $('btnLassoRun').addEventListener('click', async () => {
     try { c.setPointerCapture(e.pointerId); } catch { /* 某些环境/合成事件会抛，不影响绘制 */ }
     anchor = toImg(e);
     if (lassoState.mode === 'erase') {
-      // 真正的橡皮：按住即开始一笔，拖过亮起部分即可擦除。
+      // 点擦：单击一下就整块擦除（与点选补块对称），不进入拖笔状态。
+      if (lassoState.pickMode) { runEraseAt(anchor); return; }
+      // 描边擦除：按住沿线稿描一段，松手吸附到真实轮廓、确认后擦掉内部。
+      if (lassoState.fillMode) {
+        lassoState.snapContour = null; updateKeepBrushUI();
+        lassoState.drawing = true; lassoState.fillDrawing = true;
+        lassoState.fillPts = [anchor]; lassoRedraw(); return;
+      }
+      // 橡皮笔刷：按住即开始一笔，拖过亮起部分即可擦除。
       lassoState.drawing = true;
       lassoState.eraseDrawing = true;
       lassoState.eraseStroke = { pts: [anchor], width: Number($('lassoKeepBrush').value) };
@@ -2749,6 +3043,12 @@ $('btnLassoRun').addEventListener('click', async () => {
       // 第二步：点选补块单击即生效；补画开始记一笔；两者都没开就忽略，
       // 绝不能改写第一步的选区 pts（否则「完成抠像」会被误禁用）
       if (lassoState.pickMode) { runPickAt(anchor); return; }
+      // 磁性描边：按住沿线稿描一段，松手吸附到真实轮廓、确认后并入目标。
+      if (lassoState.fillMode) {
+        lassoState.snapContour = null; updateKeepBrushUI();
+        lassoState.drawing = true; lassoState.fillDrawing = true;
+        lassoState.fillPts = [anchor]; lassoRedraw(); return;
+      }
       if (!lassoState.keepMode) return;
       lassoState.drawing = true;
       lassoState.keepDrawing = true;
@@ -2762,20 +3062,35 @@ $('btnLassoRun').addEventListener('click', async () => {
   });
 
   function runPickAt(pt) {
-    const res = pickRegionAt(pt[0], pt[1]);
+    const res = growRegionAt(pt[0], pt[1], { erase: false });
     if (!res) return;
     if (res.reason === 'outside') { $('extractStatus').textContent = '请点在第一步圈出的范围内'; return; }
     if (res.reason === 'already') { $('extractStatus').textContent = '这一块已经是保留目标了'; return; }
-    if (res.reason === 'toobig') { $('extractStatus').textContent = '这一片太大（超过圈选框四成），换个更小的暗块点，或改用画笔补画'; return; }
+    if (res.reason === 'toobig') { $('extractStatus').textContent = '这一片长得太大（超过圈选框七成），多半是漏进了背景——换个更靠中心的点，或改用画笔补画'; return; }
     pushMaskOp({ type: 'keepRegion', idx: res.idx });
     rebuildLassoMaskOverlay();
     $('extractStatus').textContent = `已整块补入 ${res.idx.length.toLocaleString()} 个像素 · 可继续点选或撤销`;
     lassoRedraw();
   }
+
+  function runEraseAt(pt) {
+    const res = growRegionAt(pt[0], pt[1], { erase: true });
+    if (!res) return;
+    if (res.reason === 'outside') { $('extractStatus').textContent = '请点在画面内'; return; }
+    if (res.reason === 'notarget') { $('extractStatus').textContent = '点擦只作用在亮着的目标上；这一点不是已识别的角色'; return; }
+    if (res.reason === 'toobig') { $('extractStatus').textContent = '这一片太大了，换个点，或改用橡皮笔刷慢慢擦'; return; }
+    const coverage = pushMaskOp({ type: 'erase', idx: res.idx });
+    rebuildLassoMaskOverlay();
+    $('extractStatus').textContent = `已整块擦除 ${res.idx.length.toLocaleString()} 个目标像素 · 当前角色占画面 ${((coverage || 0) * 100).toFixed(0)}% · 可撤销`;
+    lassoRedraw();
+  }
   c.addEventListener('pointermove', (e) => {
     if (!lassoState.drawing) return;
     const p = toImg(e);
-    if (lassoState.eraseDrawing) {
+    if (lassoState.fillDrawing) {
+      const last = lassoState.fillPts[lassoState.fillPts.length - 1];
+      if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 3) { lassoState.fillPts.push(p); lassoRedraw(); }
+    } else if (lassoState.eraseDrawing) {
       const stroke = lassoState.eraseStroke;
       const last = stroke.pts[stroke.pts.length - 1];
       if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 1) { stroke.pts.push(p); lassoRedraw(); }
@@ -2795,7 +3110,25 @@ $('btnLassoRun').addEventListener('click', async () => {
     if (!lassoState.drawing) return;
     const lastEraseStroke = lassoState.eraseDrawing ? lassoState.eraseStroke : null;
     const lastKeepStroke = lassoState.keepDrawing ? lassoState.keepStrokes[lassoState.keepStrokes.length - 1] : null;
-    lassoState.drawing = false; lassoState.keepDrawing = false; lassoState.eraseDrawing = false;
+    const doingFill = lassoState.fillDrawing;
+    lassoState.drawing = false; lassoState.keepDrawing = false; lassoState.eraseDrawing = false; lassoState.fillDrawing = false;
+    if (doingFill) {
+      const raw = lassoState.fillPts; lassoState.fillPts = [];
+      const snap = magneticSnap(raw); // 吸附到真实线稿并闭合
+      if (!snap) {
+        $('extractStatus').textContent = '这一描太短了——沿着要选的部件线稿多描一段再松手';
+        lassoRedraw();
+        return;
+      }
+      // 不立刻提交：先把吸附结果画出来给用户看，点「锁定此轮廓」才生效。
+      lassoState.snapContour = snap;
+      updateKeepBrushUI();
+      $('extractStatus').textContent = lassoState.mode === 'erase'
+        ? '已吸附到线稿轮廓（青色）· 点「✓ 锁定擦除」确认，或重新描一遍'
+        : '已吸附到线稿轮廓（青色）· 点「✓ 锁定此轮廓」确认，或重新描一遍';
+      lassoRedraw();
+      return;
+    }
     if (lastEraseStroke) {
       lassoState.eraseStroke = null;
       const idx = selectedIndicesInStroke(lastEraseStroke);
@@ -2860,7 +3193,14 @@ $('btnShoot').addEventListener('click', async () => {
   if (!state.anime) { setStatus('请先上传动画截图，取景时叠加它做参考'); return; }
   const btn = $('btnShoot'); btn.disabled = true;
   try {
-    const canvas = await launchViewfinder(state.anime.imgData);
+    const canvas = await launchViewfinder(state.anime.imgData, {
+      onReferenceChange: async (file) => {
+        const data = await fileToImageData(file);
+        $('thumbAnime').src = data.url; $('thumbAnime').hidden = false;
+        await handleAnimeData(data);
+        return state.anime.imgData;
+      },
+    });
     if (canvas) {
       const data = await canvasToPhotoData(canvas);
       $('thumbPhoto').src = data.url; $('thumbPhoto').hidden = false;
@@ -2873,7 +3213,7 @@ $('btnShoot').addEventListener('click', async () => {
   }
 });
 
-window.__qa = { state, renderFullRes, enterAlignMode, applyAlignCrop, alignState, recompute, runLassoBox, launchViewfinder, makeAnimeToSceneGif, makeAnimeToSceneApng, undoMaskOp };
+window.__qa = { state, renderFullRes, enterAlignMode, applyAlignCrop, alignState, recompute, runLassoBox, launchViewfinder, makeAnimeToSceneGif, makeAnimeToSceneApng, undoMaskOp, growRegionAt, contourInteriorIndices, magneticSnap, ensureEdgeCost, lassoState };
 
 // 隐藏的开发验收入口：http://localhost:8126/?qa-demo=1
 if (new URLSearchParams(location.search).has('qa-demo')) {

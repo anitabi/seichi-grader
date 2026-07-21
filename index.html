@@ -4,15 +4,20 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="description" content="从动画截图提取色调和配色，一键套用到实景圣地巡礼照片；还可把动画角色合成进实景画面。" />
-  <meta name="theme-color" content="#0e1014" />
+  <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="巡礼调色" />
   <title>聖地巡礼 · 调色对比生成器</title>
+  <script>
+    // 直接双击 HTML 时，浏览器会拦截模块、Worker 和相机能力，页面看得到但按钮不会工作。
+    // 本机开发统一交给仅监听 127.0.0.1 的服务；线上与 GitHub Pages 不受影响。
+    if (location.protocol === 'file:') location.replace('http://127.0.0.1:8126/');
+  </script>
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./icon-180.png" />
-  <link rel="stylesheet" href="./style.css?v=20260717-keep" />
+  <link rel="stylesheet" href="./style.css?v=20260718-stack-touch" />
 </head>
 <body>
   <header class="top">
@@ -68,14 +73,17 @@
           <img class="thumb" id="thumbPhoto" alt="" hidden />
         </div>
       </div>
-      <button id="btnShoot" class="ghost shoot-btn">📷 现场取景拍摄（对着动画构图拍）</button>
-      <div class="button-load-row">
-        <button id="btnMatchScene" class="ghost shoot-btn" disabled>🔍 从多张照片里找最像截图的</button>
-        <span id="loadMatchScene" class="button-load" role="status" aria-live="polite" hidden></span>
+      <button id="btnShoot" class="ghost shoot-btn">📷 现场取景拍摄（预览辅助线）</button>
+      <div class="match-entry">
+        <div class="button-load-row">
+          <button id="btnMatchScene" class="ghost shoot-btn" disabled>🔍 匹配对应照片</button>
+          <span id="loadMatchScene" class="button-load" role="status" aria-live="polite" hidden></span>
+        </div>
+        <p class="match-help">从多张实景图中寻找与动画截图最匹配的一张；只放入实景照片时，也可反向匹配动画截图。</p>
       </div>
       <input type="file" id="matchFiles" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" multiple hidden />
       <div class="match-results" id="matchResults" hidden>
-        <label>全部照片已按相似度排序；左右滑动并点选作为实景照片</label>
+        <label id="matchResultsLabel">全部照片已按相似度排序；左右滑动并点选作为实景照片</label>
         <div class="match-grid" id="matchGrid"></div>
       </div>
       <label class="check compact">
@@ -231,13 +239,19 @@
               <span>叠加到实景场景（可拖拽角色）</span>
             </label>
             <div class="extract-status" id="extractStatus">先上传动画截图</div>
+            <div class="mask-quality-controls">
+              <strong>抠图细节由你决定</strong>
+              <p>调整立即生效，不会重新调用模型。</p>
+              <label class="mini">保留细节 ← 抠图阈值 <span id="maskThrVal">110</span> → 去背景杂边</label>
+              <input type="range" id="maskThr" min="40" max="200" value="110" />
+              <label class="mini">保留边缘 ← 边缘收紧（去白边）<span id="maskErodeVal">0px</span> → 收紧</label>
+              <input type="range" id="maskErode" min="0" max="10" value="0" />
+              <label class="check"><input type="checkbox" id="maskFilter" checked /><span>去掉与角色分离的小碎点</span></label>
+              <label class="check"><input type="checkbox" id="maskClose" checked /><span>填平角色内部小洞、连接小缺口</span></label>
+            </div>
             <details class="adv">
-              <summary>角色微调 · 阈值 / 边缘 / 阴影 / 颗粒</summary>
+              <summary>角色微调 · 大小 / 光影 / 颗粒</summary>
               <div class="d-body">
-                <label class="mini">抠图阈值 <span id="maskThrVal">110</span></label>
-                <input type="range" id="maskThr" min="40" max="200" value="110" />
-                <label class="mini">边缘收紧（去背景晕边）<span id="maskErodeVal">0px</span></label>
-                <input type="range" id="maskErode" min="0" max="10" value="0" />
                 <label class="mini">角色大小 <span id="charScaleVal">100%</span>（100% = 与动画同比例）</label>
                 <input type="range" id="charScale" min="20" max="300" value="100" />
                 <label class="mini">光照融合 <span id="harmonizeVal">35%</span></label>
@@ -333,6 +347,7 @@
       </div>
       <p>你上传的图片只在本机浏览器中处理，不会上传到服务器。</p>
       <nav class="footer-links" aria-label="项目链接">
+        <a href="https://ai.meta.com/resources/models-and-libraries/dinov3-license/" target="_blank" rel="noreferrer">Built with DINOv3</a>
         <a href="https://github.com/catofkili/seichi-grader" target="_blank" rel="noreferrer">GitHub</a>
         <a href="https://github.com/catofkili/seichi-grader/commit/236659a" target="_blank" rel="noreferrer">版本 · 236659a</a>
         <a href="mailto:lovelysummerchannel@outlook.com?subject=%E8%81%96%E5%9C%B0%E5%B7%A1%E7%A4%BC%20%E8%B0%83%E8%89%B2%E7%94%9F%E6%88%90%E5%99%A8%20%E5%8F%8D%E9%A6%88">问题反馈</a>
@@ -354,6 +369,8 @@
       </div>
       <div class="lasso-keep">
         <button type="button" id="btnLassoPick" class="small" hidden>👆 点选补块</button>
+        <button type="button" id="btnLassoFill" class="small" hidden>🧲 磁性描边</button>
+        <button type="button" id="btnLassoFillConfirm" class="small primary" hidden>✓ 锁定此轮廓</button>
         <button type="button" id="btnLassoKeep" class="small">🖊 补画（刷开蒙版）</button>
         <button type="button" id="btnLassoUndo" class="small" hidden>↩ 撤销上一步</button>
         <label id="lassoKeepSize" hidden><span id="lassoBrushSizeLabel">画笔粗细</span> <input id="lassoKeepBrush" type="range" min="4" max="160" value="36" /></label>
@@ -392,6 +409,6 @@
     </div>
   </div>
 
-  <script type="module" src="./app.js?v=20260718-all-match-results"></script>
+  <script type="module" src="./app.js?v=20260718-stack-touch"></script>
 </body>
 </html>

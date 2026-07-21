@@ -1,4 +1,4 @@
-// detect.js — 浏览器内动画人物检测（YOLOv8s ONNX，deepghs/anime_person_detection）。
+// detect.js — 浏览器内动画人物检测（YOLOv8s static-int8 ONNX，deepghs/anime_person_detection）。
 // 用途：先找到"哪里有角色"，再把每个框裁下来交给 ISNet 抠图，
 // 解决显著性模型抠不到小角色、误抠食物/建筑的问题。
 import { getSession, evictSession } from './ort-env.js';

@@ -1,14 +1,14 @@
 # 第三方模型与运行时许可
 
-最近核对日期：2026-07-13。此表用于记录项目内实际使用的模型来源；发布包仍应附带各许可证全文与版权声明。
+最近核对日期：2026-07-18。此表用于记录项目内实际使用的模型来源；发布包仍应附带各许可证全文与版权声明。
 
 | 组件 | 项目内文件 | 来源 | 许可 | 发布判断 |
 |---|---|---|---|---|
-| Anime Person Detection | `models/person-detect.onnx` | [deepghs/anime_person_detection](https://huggingface.co/deepghs/anime_person_detection) | MIT | 可再分发，需保留 MIT 版权与许可文本 |
+| Anime Person Detection | `models/person-detect.onnx` | [deepghs/anime_person_detection](https://huggingface.co/deepghs/anime_person_detection) | MIT | 可再分发，需保留 MIT 版权与许可文本；本项目由原 FP32 ONNX 静态量化为 int8，需保留该转换说明 |
 | ISNet Anime | `models/isnet-anime-fp16.onnx`, `models/isnet-anime-512-fp16.onnx` | [SkyTNT/anime-segmentation](https://github.com/SkyTNT/anime-segmentation) / [模型仓库](https://huggingface.co/skytnt/anime-seg) | **权重许可未标注**；代码仓库为 Apache-2.0 | **公开发布阻塞项**：不能只凭训练代码仓库的 Apache-2.0 就断言 ONNX 权重可再分发。需取得权重作者的明确许可，或替换为模型卡明确标注可再分发许可的权重。 |
 | SlimSAM 77 uniform | `models/sam-encoder.onnx`, `models/sam-decoder.onnx` | [Xenova/slimsam-77-uniform](https://huggingface.co/Xenova/slimsam-77-uniform) | Apache-2.0 | 可再分发，需附 Apache-2.0、保留 NOTICE/修改说明（如有） |
 | ONNX Runtime Web | CDN 运行时 | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) | MIT | 可使用 CDN；发布时保留第三方声明 |
-| DINOv2 ViT-S/14（找图匹配） | `models/scene-embed-int8.onnx` | [facebookresearch/dinov2](https://github.com/facebookresearch/dinov2)，经 [timm `vit_small_patch14_dinov2.lvd142m`](https://huggingface.co/timm/vit_small_patch14_dinov2.lvd142m) 导出（见 `tools/build-scene-embed.py`） | Apache-2.0（权重与代码均标注） | 可再分发，需附 Apache-2.0 并注明「由原权重转换为 int8 ONNX」 |
+| DINOv3 ViT-S/16（找图匹配） | `models/scene-embed-int8.onnx` | [Meta DINOv3](https://ai.meta.com/resources/models-and-libraries/dinov3/)，经 [timm `vit_small_patch16_dinov3.lvd1689m`](https://huggingface.co/timm/vit_small_patch16_dinov3.lvd1689m) 导出（见 `tools/build-scene-embed.py`） | [DINOv3 License](https://ai.meta.com/resources/models-and-libraries/dinov3-license/) | 可再分发；需随发布包提供该许可协议，并在相关网站/UI 的显著位置显示「Built with DINOv3」，同时注明「由原权重转换为 int8 ONNX」 |
 
 ## 2026-07-13 核查结论
 

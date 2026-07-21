@@ -1,12 +1,12 @@
 :root {
-  --bg: #0e1014;
-  --panel: #171a21;
-  --panel-2: #1f242e;
-  --line: #2a313d;
-  --text: #e6e9ef;
-  --muted: #8a93a3;
-  --accent: #ff5e8a;
-  --accent-2: #6ea8ff;
+  --bg: #f4f8fb;
+  --panel: #ffffff;
+  --panel-2: #eef4f8;
+  --line: #cddde7;
+  --text: #00171f;
+  --muted: #557687;
+  --accent: #007ea7;
+  --accent-2: #00a7e1;
   --radius: 12px;
 }
 
@@ -24,7 +24,7 @@ body {
 
 .top {
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, #141821, #0e1014);
+  background: linear-gradient(180deg, #ffffff, #f4f8fb);
   position: sticky; top: 0; z-index: 20;
 }
 .top-inner {
@@ -51,6 +51,10 @@ body {
 }
 .footer-credit { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; }
 .footer-credit strong { color: var(--text); font-size: 12px; }
+.mask-quality-controls { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 72%, var(--accent) 8%); }
+.mask-quality-controls strong { display: block; font-size: 13px; }
+.mask-quality-controls p { margin: 2px 0 8px; font-size: 12px; color: var(--muted); }
+.mask-quality-controls .check { margin-top: 6px; font-size: 12px; }
 .site-footer p { margin: 0; }
 .footer-links { display: flex; gap: 12px; }
 .footer-links a { color: var(--accent-2); text-decoration: none; }
@@ -74,12 +78,13 @@ body {
   width: 19px; height: 19px; display: grid; place-items: center; border-radius: 50%;
   font-size: 10px; border: 1px solid var(--line); background: var(--panel-2);
 }
-.workflow li.done { color: #a5d8b5; }
-.workflow li.done span { border-color: #4f9b6c; background: #1d3a29; font-size: 0; }
+.workflow li.done { color: #a6ddf3; }
+.workflow li.done span { border-color: #007ea7; background: #dbeff8; font-size: 0; }
 .workflow li.done span::after { content: '✓'; font-size: 11px; }
 .workflow li.current { color: var(--text); }
-.workflow li.current span { border-color: var(--accent-2); color: #fff; background: #28549d; }
+.workflow li.current span { border-color: var(--accent-2); color: #fff; background: #007ea7; }
 .workflow em { font-style: normal; font-size: 9.5px; color: var(--muted); }
+
 .logo {
   width: 46px; height: 46px; border-radius: 12px;
   display: grid; place-items: center;
@@ -120,7 +125,7 @@ body {
   transition: border-color .15s, background .15s;
   background: var(--panel-2);
 }
-.drop:hover, .drop.dragover { border-color: var(--accent-2); background: #1b2433; }
+.drop:hover, .drop.dragover { border-color: var(--accent-2); background: #e7f0f6; }
 .drop-inner {
   position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -133,6 +138,32 @@ body {
   background: linear-gradient(0deg, rgba(0,0,0,.6), transparent 55%);
   justify-content: flex-end; align-items: flex-start; padding: 10px;
 }
+/* 载图后标签压在深色渐变上，强制白字（白底主题默认是深字，会看不清） */
+.drop:has(.thumb:not([hidden])) .drop-inner strong,
+.drop:has(.thumb:not([hidden])) .hint { color: #fff; }
+
+/* ---------- 阶段化界面（progressive disclosure） ----------
+   setup：两张图还没凑齐 —— 素材区是主角，右侧调色控件先淡出，别抢注意力。
+   edit ：两张图都到位 —— 上传框收成小缩略图（大概率不再点），把最常调的
+          「强度 / 迁移模式」上浮强调，用户一眼看到该玩哪儿。 */
+.layout { transition: none; }
+/* setup：右侧调色栏还用不上，淡出且不可点，视线自然落到素材区 */
+[data-phase="setup"] .controls { opacity: .5; }
+[data-phase="setup"] .controls .sec:first-child { pointer-events: none; }
+/* edit：两个上传框收窄成一行小图，仍可点击更换 */
+[data-phase="edit"] .inputs .drop { min-height: 0; }
+[data-phase="edit"] .inputs .thumb { height: 84px; }
+[data-phase="edit"] .inputs .drop:not(:has(.thumb:not([hidden]))) { min-height: 84px; }
+/* edit：动画主色是参考信息，收起省空间（悬停素材区可临时看） */
+[data-phase="edit"] .inputs .palette-box { display: none; }
+/* edit：强调最常用的调色控件——强度那一组加浅蓝卡片和更粗的滑轨 */
+[data-phase="edit"] .controls .sec:first-child > .sec-title + .ctrl-group {
+  background: #e6f5fc;
+  border: 1px solid #9fd7ee;
+  border-radius: 10px; padding: 10px 12px; margin: 0 -2px 4px;
+}
+[data-phase="edit"] .controls .sec:first-child > .sec-title + .ctrl-group input[type=range] { height: 30px; }
+[data-phase="edit"] .controls .sec:first-child > .sec-title + .ctrl-group label { color: var(--text); font-weight: 600; }
 
 .palette-box label, .ctrl-group label {
   font-size: 12px; color: var(--muted); display: block; margin-bottom: 8px;
@@ -158,6 +189,8 @@ body {
 .extract-row > .ghost { flex: 1; }
 .button-load-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .button-load-row .shoot-btn { flex: 1; margin: 0; }
+.match-entry { display: flex; flex-direction: column; }
+.match-help { margin: 3px 2px 0; color: var(--muted); font-size: 10.5px; line-height: 1.45; }
 .button-load {
   flex: 0 1 132px; color: var(--accent-2); font-size: 10.5px; line-height: 1.25;
   overflow-wrap: anywhere;
@@ -183,7 +216,7 @@ body {
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #232a36;
+  background: #eef4f8;
   color: var(--text);
   font-size: 12px; font-style: normal; font-family: inherit;
   line-height: 1.55; text-align: left; white-space: normal;
@@ -192,12 +225,12 @@ body {
 .info-tip:hover::after, .info-tip.open::after { display: block; }
 button.ghost {
   border: 1px solid var(--accent-2);
-  background: rgba(110, 168, 255, .08);
+  background: rgba(0, 167, 225, .08);
   color: var(--accent-2);
 }
 button.ghost.ai {
   border-color: var(--accent);
-  background: rgba(255, 94, 138, .08);
+  background: rgba(0, 126, 167, .08);
   color: var(--accent);
 }
 .check { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text); cursor: pointer; margin: 0; }
@@ -226,7 +259,7 @@ button.ghost.ai {
   position: relative; flex: 1; width: 100%;
   display: grid; place-items: center;
   background:
-    repeating-conic-gradient(#1a1d24 0% 25%, #14171d 0% 50%) 50% / 22px 22px;
+    repeating-conic-gradient(#e7f0f6 0% 25%, #eef4f8 0% 50%) 50% / 22px 22px;
   overflow: hidden;
   /* pan-y：页面竖向滚动仍交给浏览器，横向拖拽与双指捏合交给我们 */
   touch-action: pan-y;
@@ -256,16 +289,16 @@ button.ghost.ai {
   clip-path: inset(0 50% 0 0);
 }
 .compare-stack-mode .compare-stack {
-  position: relative; inset: auto; width: 100%; height: 100%; padding: 8px;
-  display: flex; flex-direction: column; gap: 8px; overflow: auto;
+  position: relative; inset: auto; width: 100%; height: 100%; padding: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; overflow: hidden;
 }
 .compare-stack-mode .stack-panel {
-  position: relative; inset: auto; flex: 1 1 0; min-height: 0; width: 100%;
-  background: rgba(0, 0, 0, .16); border: 1px solid var(--line); border-radius: 8px;
+  position: relative; inset: auto; flex: 0 0 auto; min-height: 0;
+  display: grid; place-items: center; background: transparent; border: 0; border-radius: 0;
 }
 .compare-stack-mode #stackAnimePanel { order: -1; }
 .compare-stack-mode .stack-panel canvas {
-  position: static; width: auto !important; height: auto !important;
+  position: static;
   max-width: 100%; max-height: 100%;
 }
 .compare-stack-mode .stack-label {
@@ -278,7 +311,7 @@ button.ghost.ai {
   color: var(--muted); font-size: 11.5px;
 }
 .compare-mode { min-height: 28px; padding: 4px 9px; border-radius: 14px; font-size: 11.5px; }
-.compare-mode.on { border-color: var(--accent-2); color: #fff; background: rgba(110, 168, 255, .2); }
+.compare-mode.on { border-color: var(--accent-2); color: #fff; background: rgba(0, 167, 225, .2); }
 .overlay-opacity { display: flex; align-items: center; gap: 5px; margin-left: auto; white-space: nowrap; }
 .overlay-opacity span { color: var(--accent-2); }
 .overlay-opacity input { width: 92px; }
@@ -342,8 +375,8 @@ button.ghost.ai {
   background: rgba(0, 0, 0, .18); border: 1px solid var(--line);
   color: var(--muted); font-size: 11px; line-height: 1.55; white-space: pre-line;
 }
-.download-probe.ok { border-color: rgba(91, 183, 123, .65); color: #b7dfc3; }
-.download-probe.problem { border-color: rgba(255, 94, 138, .7); color: #ffc0d0; }
+.download-probe.ok { border-color: rgba(0, 167, 225, .65); color: #cdeaf7; }
+.download-probe.problem { border-color: rgba(0, 126, 167, .7); color: #bce2ef; }
 #btnClearModelCache { color: var(--muted); }
 .thumb { image-orientation: from-image; }
 input[type=range] { accent-color: var(--accent); }
@@ -370,7 +403,7 @@ button.primary {
 .export-note { font-size: 10.5px; line-height: 1.45; color: var(--muted); margin-top: -5px; }
 
 /* ---------- 导出选择面板 ---------- */
-.export-hub { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 5vh 6vw; background: rgba(4, 6, 10, .78); }
+.export-hub { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 5vh 6vw; background: rgba(6, 8, 4, .78); }
 .export-hub[hidden] { display: none; }
 .export-hub-dialog { width: min(1120px, 88vw); height: min(80vh, 820px); overflow: auto; padding: 20px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: 0 22px 80px rgba(0,0,0,.5); }
 .export-hub-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
@@ -378,7 +411,7 @@ button.primary {
 .export-hub-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .export-hub-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); gap: 14px; }
 .export-card { min-height: 0; padding: 0 0 12px; overflow: hidden; text-align: left; background: var(--panel-2); border-color: var(--line); }
-.export-card canvas, .export-card-text i { display: block; width: 100%; height: 150px; margin: 0 0 10px; background: #090c12; object-fit: contain; }
+.export-card canvas, .export-card-text i { display: block; width: 100%; height: 150px; margin: 0 0 10px; background: #f4f8fb; object-fit: contain; }
 .export-card b, .export-card span { display: block; padding: 0 12px; }
 .export-card b { color: var(--text); font-size: 14px; }
 .export-card span { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1.35; }
@@ -412,9 +445,9 @@ button.primary {
 .align-bar {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 8px 12px; margin-bottom: 8px;
-  background: var(--panel, #171a21); border: 1px solid var(--line, #2a2f3a); border-radius: 10px;
+  background: var(--panel, #ffffff); border: 1px solid var(--line, #e0eaf1); border-radius: 10px;
 }
-.align-bar .align-tip { font-size: 12px; color: var(--muted, #8b93a3); }
+.align-bar .align-tip { font-size: 12px; color: var(--muted, #557687); }
 .align-bar input[type="range"] { width: 120px; }
 .align-bar .mini.inline { margin: 0; white-space: nowrap; }
 button.small { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
@@ -431,17 +464,17 @@ button.small { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
 /* ---------- 圈选抠图 ---------- */
 .lasso-modal {
   position: fixed; inset: 0; z-index: 60;
-  background: rgba(10, 12, 16, .94);
+  background: rgba(255, 255, 255, .94);
   display: flex; flex-direction: column;
 }
 .lasso-modal[hidden] { display: none; }
 .lasso-head {
   display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap;
-  padding: 10px 16px; color: var(--muted, #8b93a3); font-size: 13px;
+  padding: 10px 16px; color: var(--muted, #557687); font-size: 13px;
 }
-.lasso-guide { display: flex; width: 100%; gap: 12px; flex-wrap: wrap; color: #c6cfdf; font-size: 12px; }
-.lasso-guide b { color: #fff; }
-.lasso-guide .active { color: #b8dcff; }
+.lasso-guide { display: flex; width: 100%; gap: 12px; flex-wrap: wrap; color: #557687; font-size: 12px; }
+.lasso-guide b { color: var(--text); }
+.lasso-guide .active { color: #cdeaf7; }
 .lasso-actions { display: flex; gap: 8px; }
 .lasso-stage { flex: 1; display: flex; align-items: center; justify-content: center; overflow: hidden; padding: 0 12px 12px; }
 #lassoCanvas { max-width: 100%; max-height: 100%; touch-action: none; cursor: crosshair; border-radius: 8px; }
@@ -449,23 +482,23 @@ button.small { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
 .lasso-shapes button { white-space: nowrap; }
 .lasso-shapes .shape-on { border-color: var(--accent); color: var(--accent); }
 .lasso-keep { display: flex; align-items: center; gap: 6px; }
-.lasso-keep #btnLassoKeep.keep-on { border-color: #58a6ff; color: #b8dcff; background: rgba(48, 130, 255, .18); }
+.lasso-keep #btnLassoKeep.keep-on { border-color: #33b8e7; color: #cdeaf7; background: rgba(0, 167, 225, .18); }
 #lassoKeepSize { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
-#lassoKeepBrush { width: 92px; accent-color: #58a6ff; }
+#lassoKeepBrush { width: 92px; accent-color: #33b8e7; }
 @media (max-width: 600px) { .lasso-guide { gap: 5px; } }
 
 /* 相机探针入口（临时诊断用） */
 .probe-entry {
   display: block; text-align: center; margin: 0 0 10px;
   padding: 11px 14px; border-radius: 10px;
-  background: #1c2740; border: 1px solid #2f6df0; color: #9db4ff;
+  background: #cddde7; border: 1px solid #007ea7; color: #66caee;
   font-size: 14px; text-decoration: none;
 }
-.probe-entry:active { background: #24345a; }
+.probe-entry:active { background: #e7f0f6; }
 
 /* 现场取景按钮 */
-.shoot-btn { width: 100%; margin: 8px 0 0; border-color: #2f6df0; color: #9db4ff; }
-.shoot-btn:not(:disabled):active { background: #1c2740; }
+.shoot-btn { width: 100%; margin: 8px 0 0; border-color: #007ea7; color: #66caee; }
+.shoot-btn:not(:disabled):active { background: #cddde7; }
 
 .match-results { margin-top: 10px; }
 .match-results > label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 8px; }
@@ -542,11 +575,11 @@ details.sec-d .extract-box { gap: 8px; }
 
 /* 核心玩法：即使尚未上传素材，也要让用户一眼看到角色合成入口 */
 details.character-section {
-  border-color: rgba(255, 94, 138, .62);
+  border-color: rgba(0, 126, 167, .62);
   background:
-    linear-gradient(135deg, rgba(255, 94, 138, .14), rgba(110, 168, 255, .12)),
+    linear-gradient(135deg, rgba(0, 126, 167, .14), rgba(0, 167, 225, .12)),
     var(--panel-2);
-  box-shadow: 0 0 0 1px rgba(110, 168, 255, .12), 0 8px 22px rgba(0, 0, 0, .18);
+  box-shadow: 0 0 0 1px rgba(0, 167, 225, .12), 0 8px 22px rgba(0, 0, 0, .18);
 }
 details.character-section > summary {
   min-height: 58px;
@@ -556,8 +589,8 @@ details.character-section > summary {
 details.character-section > summary::after { margin-left: 8px; }
 .character-summary-copy { display: flex; flex-direction: column; gap: 3px; }
 .character-summary-title { display: flex; align-items: center; gap: 7px; font-size: 13px; }
-.character-summary-subtitle { color: #c3cad8; font-size: 11px; font-weight: 400; }
-details.character-section[open] > summary { background: rgba(13, 16, 23, .18); }
+.character-summary-subtitle { color: #557687; font-size: 11px; font-weight: 400; }
+details.character-section[open] > summary { background: rgba(0, 23, 31, .18); }
 
 /* 空预览态的流程指引 */
 .empty-flow {
@@ -585,31 +618,32 @@ details.character-section[open] > summary { background: rgba(13, 16, 23, .18); }
   border-radius: 20px; padding: 7px 14px; font-size: 12.5px; white-space: nowrap;
 }
 .sun-toggle[aria-pressed="true"] {
-  background: #f5c542; border-color: #f5c542; color: #241a00; font-weight: 700;
+  background: #003459; border-color: #003459; color: #e6eef4; font-weight: 700;
 }
 
 /* 强光模式：整体拉高界面亮度与对比、加粗描边、放大控件。
    刻意不碰 .compare 里的调色预览画布——预览必须显示真实调色结果，
    一旦为了"看清"而提亮，用户在阳光下判断的就不是真实色彩了。 */
+/* 白底主题下的强光模式 = 更高对比：纯白底、近黑字、更深的蓝与更重的描边 */
 :root.sunlight {
-  --bg: #05070a;
-  --panel: #262d3b;
-  --panel-2: #323b4d;
-  --line: #61708c;
-  --text: #ffffff;
-  --muted: #c9d1e2;
-  --accent: #ff487d;
-  --accent-2: #4aa3ff;
+  --bg: #ffffff;
+  --panel: #ffffff;
+  --panel-2: #e6eef4;
+  --line: #003459;
+  --text: #00171f;
+  --muted: #003459;
+  --accent: #006287;
+  --accent-2: #007ea7;
 }
 .sunlight body { font-weight: 500; }
-.sunlight .top { background: linear-gradient(180deg, #2a3241, #12161d); }
-.sunlight .sec-title, .sunlight .drop-inner strong, .sunlight h1,
-.sunlight .char-chip, .sunlight .badge { color: #fff; }
+.sunlight .top { background: linear-gradient(180deg, #ffffff, #eef4f8); }
+.sunlight .sec-title, .sunlight h1, .sunlight .char-chip { color: #00171f; }
+.sunlight .badge { color: #fff; }
 .sunlight button { border-width: 1.5px; font-weight: 600; }
-.sunlight details.adv > summary, .sunlight details.sec-d > summary { color: #eef2fa; }
+.sunlight details.adv > summary, .sunlight details.sec-d > summary { color: #00171f; }
 .sunlight .drop { border-width: 2px; }
 .sunlight input[type=range] { filter: contrast(1.15); }
-.sunlight .workflow li { color: #eef2fa; }
+.sunlight .workflow li { color: #00171f; }
 /* 对比条把手在强光下更醒目 */
 .sunlight .handle { width: 3px; }
 .sunlight .badge { background: rgba(0,0,0,.78); }

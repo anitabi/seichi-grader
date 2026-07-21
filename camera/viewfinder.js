@@ -1,10 +1,10 @@
 // viewfinder.js — 现场取景编排。自建全屏 UI（不进 index.html），把会话/叠加/拍照接到一起。
-// 入口：launchViewfinder(animeSource) → Promise<HTMLCanvasElement|null>
+// 入口：launchViewfinder(animeSource, options) → Promise<HTMLCanvasElement|null>
 //   animeSource: 动画参考图（ImageData / Image / Canvas）
 //   resolve(canvas) = 用户拍下的照片（已裁成参考图比例）；resolve(null) = 用户取消。
 // MVP 范围：摄像头 + 四叠加模式 + 透明度 + 冻结 + 拍照 + 手电筒/镜头切换。不含锚点指导。
 import { CameraSession, checkSupport } from './camera-session.js';
-import { OverlayRenderer } from './overlay-renderer.js';
+import { OverlayRenderer } from './overlay-renderer.js?v=20260718-reference-switch';
 import { capturePhoto, cropToAspect } from './capture-adapter.js';
 import { rotateCanvas } from '../canvas-util.js';
 
@@ -17,25 +17,26 @@ const CSS = `
 .vf-stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;}
 .vf-stage canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
 .vf-frozen{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;}
-.vf-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;color:#cdd3dd;}
-.vf-topbar{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;
+.vf-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;color:#d0d5c4;}
+.vf-topbar{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:center;gap:6px;
   padding:10px 12px;background:linear-gradient(#000a,#0000);z-index:3;}
 .vf-topbar button{background:#0006;border:1px solid #fff4;color:#fff;border-radius:20px;padding:7px 14px;font-size:13px;}
+.vf-topbar [data-act="close"]{margin-right:auto;}
 .vf-modes{position:absolute;bottom:96px;left:0;right:0;display:flex;gap:6px;justify-content:center;flex-wrap:wrap;padding:0 10px;z-index:3;}
 .vf-modes button{background:#0007;border:1px solid #fff3;color:#fff;border-radius:18px;padding:7px 12px;font-size:12.5px;}
-.vf-modes button.on{background:#2f6df0;border-color:#2f6df0;}
+.vf-modes button.on{background:#00a7e1;border-color:#00a7e1;}
 .vf-modes.compact button:not(.on):not(.vf-more){display:none;}
-.vf-modes .vf-more{border-style:dashed;color:#cdd3dd;}
+.vf-modes .vf-more{border-style:dashed;color:#d0d5c4;}
 .vf-bottom{position:absolute;bottom:0;left:0;right:0;display:flex;align-items:center;justify-content:space-between;
   padding:14px 22px calc(14px + env(safe-area-inset-bottom));background:linear-gradient(#0000,#000a);z-index:3;}
 .vf-shutter{width:70px;height:70px;border-radius:50%;background:#fff;border:4px solid #fff6;flex:0 0 auto;}
 .vf-shutter:active{transform:scale(.94);}
 .vf-side{display:flex;flex-direction:column;gap:6px;align-items:center;width:64px;}
 .vf-side button{background:#0007;border:1px solid #fff3;color:#fff;border-radius:16px;padding:6px 8px;font-size:11.5px;width:100%;}
-.vf-side button.on{background:#c98a2f;border-color:#c98a2f;}
+.vf-side button.on{background:#007ea7;border-color:#007ea7;}
 .vf-slider{position:absolute;bottom:150px;left:0;right:0;padding:0 24px;z-index:3;display:flex;align-items:center;gap:10px;}
 .vf-slider input{flex:1;}
-.vf-slider span{font-size:12px;color:#cdd3dd;min-width:70px;}
+.vf-slider span{font-size:12px;color:#d0d5c4;min-width:70px;}
 .vf-toast{position:absolute;top:56px;left:50%;transform:translateX(-50%);background:#000b;border:1px solid #fff3;
   border-radius:16px;padding:6px 14px;font-size:12.5px;z-index:4;opacity:0;transition:opacity .2s;}
 .vf-toast.show{opacity:1;}
@@ -54,7 +55,7 @@ const MODE_LABELS = [
   ['transparent', '半透明'], ['outline', '轮廓'], ['blink', '闪烁'], ['split', '分割'],
 ];
 
-function launchViewfinder(animeSource) {
+function launchViewfinder(animeSource, options = {}) {
   injectStyle();
   return new Promise((resolve) => {
     const root = document.createElement('div');
@@ -70,9 +71,11 @@ function launchViewfinder(animeSource) {
         <div class="vf-msg" hidden></div>
         <div class="vf-topbar">
           <button data-act="close">✕ 关闭</button>
+          <button data-act="changeReference">换动画</button>
           <button data-act="rotate" aria-label="将动画参考图顺时针旋转 90 度">↻ 旋转 90°</button>
           <button data-act="freeze">❄️ 冻结</button>
         </div>
+        <input type="file" data-ctl="referenceFile" accept="image/jpeg,image/png,image/webp,.heic,.heif" hidden />
         <div class="vf-slider"><span data-label="opacity">透明 50%</span><input type="range" min="15" max="100" value="50" data-ctl="opacity"></div>
         <div class="vf-modes"></div>
         <div class="vf-bottom">
@@ -105,6 +108,28 @@ function launchViewfinder(animeSource) {
     }
 
     const showToast = (t, ms = 1800) => { toast.textContent = t; toast.classList.add('show'); clearTimeout(showToast._t); showToast._t = setTimeout(() => toast.classList.remove('show'), ms); };
+
+    $('[data-ctl="referenceFile"]').addEventListener('change', async (event) => {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        showToast('正在更换动画截图…');
+        let nextSource;
+        if (options.onReferenceChange) nextSource = await options.onReferenceChange(file);
+        else {
+          const bitmap = await createImageBitmap(file);
+          renderer.setSource(bitmap); bitmap.close?.();
+          nextSource = null;
+        }
+        if (nextSource) renderer.setSource(nextSource);
+        showToast('动画截图已更换');
+      } catch (error) {
+        console.error(error);
+        showToast('更换失败：' + (error.message || error), 3200);
+      } finally {
+        event.target.value = '';
+      }
+    });
 
     // CSS 中 video 用 object-fit: contain；叠加图必须只画在视频实际可见的区域，
     // 否则竖屏下上下的黑边会让参考构图与拍出的画面错位。
@@ -197,6 +222,10 @@ function launchViewfinder(animeSource) {
       const act = e.target.closest('[data-act]')?.dataset.act;
       if (!act) return;
       if (act === 'close') return cleanup(null);
+      if (act === 'changeReference') {
+        $('[data-ctl="referenceFile"]').click();
+        return;
+      }
       if (act === 'rotate') {
         rotateReference(renderer.rotation + 90);
         return;

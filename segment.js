@@ -293,7 +293,7 @@ function cutoutCanvas(imageData, result) {
   return c;
 }
 
-// 清理任意 alpha（如 AI 输出）：阈值 -> 连通域筛选 -> 闭运算 -> 填洞 -> 羽化
+// 清理任意 alpha（如 AI 输出）：阈值 -> 可选去碎点 -> 可选闭运算/填洞 -> 羽化
 // 能去掉与主体断开的噪点杂边。
 // keepLargest: true=只留最大域(旧行为) / false=全保留 / 缺省=保留多个足够大的域(多角色安全)
 function cleanupAlpha(alpha, w, h, opts = {}) {
@@ -302,11 +302,13 @@ function cleanupAlpha(alpha, w, h, opts = {}) {
   const erode = opts.erode ?? 0; // 收边：向内收缩像素数，去背景晕边
   const bin = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) bin[i] = alpha[i] >= thr ? 1 : 0;
-  let mask = opts.keepLargest === false ? bin
+  let mask = opts.filter === false || opts.keepLargest === false ? bin
     : filterComponents(bin, w, h, opts.keepLargest === true ? 'largest' : 'multi');
-  mask = morph(mask, w, h, 1, true);
-  mask = morph(mask, w, h, 1, false);
-  mask = fillHoles(mask, w, h);
+  if (opts.close !== false) {
+    mask = morph(mask, w, h, 1, true);
+    mask = morph(mask, w, h, 1, false);
+    mask = fillHoles(mask, w, h);
+  }
   if (erode > 0) mask = morph(mask, w, h, erode, false);
   return feather(mask, w, h, featherR);
 }

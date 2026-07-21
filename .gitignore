@@ -6,6 +6,11 @@
 /test-photo-fake.jpg
 /web-photo-*.jpg
 /work/
+# 仅供本机使用的 ToonOut 原生推理实验，不进入公开网页或仓库
+/tools/toonout-local-server.py
+/启动 ToonOut 开发实验.command
+# 论坛巡礼图评测数据（第三方版权素材 + 截图，仅本地验收用）
+/qa/forum-match-*/
 
 # 本机模型转换环境
 /.venv-convert/
@@ -23,3 +28,6 @@ models/isnet-anime-512-fp16.onnx
 
 # 找图匹配模型的 fp32 中间产物（84MB，只有 int8 版参与分发）
 models/scene-embed-fp32.onnx
+
+# 人物检测 int8 量化过程的候选文件（正式版仍使用 person-detect.onnx）
+models/person-detect-int8-test.onnx

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Export DINOv2 ViT-S/14 to int8 ONNX for in-browser scene matching (找最像的实景).
+"""Export a DINOv2/DINOv3 scene encoder to int8 ONNX for in-browser matching.
 
-Produces models/scene-embed-int8.onnx (~21 MiB): 224x224 RGB in, 384-d CLS
-embedding out. Weights download from Hugging Face; set
+The default is DINOv3 ViT-S/16. It produces models/scene-embed-int8.onnx
+(~21 MiB): 224x224 RGB in, 384-d CLS embedding out. Weights download from Hugging Face; set
 HF_ENDPOINT=https://hf-mirror.com if huggingface.co is unreachable.
 """
+import argparse
 from pathlib import Path
 
 import timm
@@ -12,12 +13,19 @@ import torch
 from onnxruntime.quantization import QuantType, quantize_dynamic
 
 ROOT = Path(__file__).resolve().parents[1]
-FP32 = ROOT / "models/scene-embed-fp32.onnx"  # intermediate, not committed
-INT8 = ROOT / "models/scene-embed-int8.onnx"
+parser = argparse.ArgumentParser()
+parser.add_argument("--variant", choices=("v2", "v3"), default="v3")
+parser.add_argument("--prefix", default="scene-embed", help="filename prefix under models/")
+args = parser.parse_args()
 
-model = timm.create_model(
-    "vit_small_patch14_dinov2.lvd142m", pretrained=True, num_classes=0, img_size=224
-)
+FP32 = ROOT / "models" / f"{args.prefix}-fp32.onnx"  # intermediate, not committed
+INT8 = ROOT / "models" / f"{args.prefix}-int8.onnx"
+MODEL_NAME = {
+    "v2": "vit_small_patch14_dinov2.lvd142m",
+    "v3": "vit_small_patch16_dinov3.lvd1689m",
+}[args.variant]
+
+model = timm.create_model(MODEL_NAME, pretrained=True, num_classes=0, img_size=224)
 model.eval()
 
 with torch.no_grad():
@@ -28,7 +36,9 @@ with torch.no_grad():
         input_names=["image"],
         output_names=["embedding"],
         opset_version=17,
-        dynamo=False,
+        # DINOv3's RoPE attention needs the newer exporter; DINOv2 retains the
+        # legacy path so its output stays byte-for-byte compatible with the app.
+        dynamo=args.variant == "v3",
     )
 
 # 只量化 MatMul：onnxruntime-web 的 WASM EP 没有 ConvInteger 实现，

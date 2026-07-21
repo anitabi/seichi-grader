@@ -60,7 +60,8 @@ http://localhost:8126/
 - `detect.js`：动画人物检测（YOLOv8s，先找角色框再抠，解决多人同框/小角色）
 - `ort-env.js`：onnxruntime-web 加载与模型会话缓存
 - `models/isnet-anime-fp16.onnx`：AI 抠图模型（ISNet-anime）
-- `models/person-detect.onnx`：人物检测模型（deepghs/anime_person_detection）
+- `models/person-detect.onnx`：人物检测模型（deepghs/anime_person_detection，static-int8）
+- `models/scene-embed-int8.onnx`：动画截图与实景图匹配模型（DINOv3 ViT-S/16）
 - `sam-segment.js`：SlimSAM 点提示分割（ISNet 抠不出的小角色自动兜底）
 - `models/sam-encoder.onnx` / `models/sam-decoder.onnx`：SAM 模型（Xenova/slimsam-77-uniform）
 - `THIRD_PARTY_LICENSES.md`：模型与运行时许可来源

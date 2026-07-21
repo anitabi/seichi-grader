@@ -17,6 +17,14 @@ class OverlayRenderer {
     this.outline = null;      // 惰性生成
   }
 
+  // 取景过程中更换动画截图：保留当前叠加模式、透明度与旋转方向，
+  // 只替换参考画面并让比例/轮廓立即随新图更新。
+  setSource(refImage) {
+    this._src = this._toCanvas(refImage);
+    this.ref = rotateCanvas(this._src, this.rotation);
+    this.outline = this.mode === 'outline' ? this._buildOutline() : null;
+  }
+
   // 旋转参考图（顺时针，0/90/180/270）。aspect/cover/轮廓全部随之更新。
   setRotation(deg) {
     this.rotation = ((deg % 360) + 360) % 360;
