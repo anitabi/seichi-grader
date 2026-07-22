@@ -23,12 +23,12 @@ async function loadOrt() {
   return ortPromise;
 }
 
-// 分块模型清单：GitHub Pages 不解析 Git LFS，而本机代理又拦 >约 40MB 的推送，
-// 故两个 83MB 的 ISNet 拆成 30MB 分块入库（models/xxx.onnx.part00..02），
-// 浏览器按序取回再拼成完整 ArrayBuffer。值 = 分块数。
+// 分块模型清单：GitHub Pages 不解析 Git LFS，本机代理又拦 >约 40MB 的推送，
+// 且 Cloudflare Pages 单文件上限 25MiB，故两个 84MB 的 ISNet 拆成 22MiB 分块
+// 入库（models/xxx.onnx.part00..03），浏览器按序取回再拼成完整 ArrayBuffer。值 = 分块数。
 const CHUNKED_MODELS = {
-  'isnet-anime-fp16.onnx': 3,
-  'isnet-anime-512-fp16.onnx': 3,
+  'isnet-anime-fp16.onnx': 4,
+  'isnet-anime-512-fp16.onnx': 4,
 };
 
 // 带进度的单文件下载，返回 { chunks:Uint8Array[], received }
@@ -62,7 +62,7 @@ async function fetchWithProgress(url, onProgress) {
     await Promise.all(urls.map(async (u) => {
       try { const h = await fetch(u, { method: 'HEAD' }); grandTotal += +h.headers.get('content-length') || 0; } catch { /* 忽略 */ }
     }));
-    if (!grandTotal) grandTotal = parts * 30 * 1024 * 1024; // 估算兜底
+    if (!grandTotal) grandTotal = parts * 22 * 1024 * 1024; // 估算兜底
     const all = [];
     let received = 0;
     for (const u of urls) {

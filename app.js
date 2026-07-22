@@ -2248,11 +2248,11 @@ $('btnSunlight').addEventListener('click', () => {
 try { if (localStorage.getItem(SUNLIGHT_KEY) === '1') setSunlight(true); } catch { /* 忽略 */ }
 
 // ---------- 模型持久缓存状态 ----------
-const MODEL_CACHE = 'seichi-models-v4';
-// 运行时实际读取 ISNet 的三个分块（见 ort-env.js），不是同名的整文件。
+const MODEL_CACHE = 'seichi-models-v5';
+// 运行时实际读取 ISNet 的四个分块（见 ort-env.js），不是同名的整文件。
 // 因此离线包也只缓存分块，避免把同一模型下载两遍。
 const ISNET_URL = DEVICE.isAppleMobile ? './models/isnet-anime-512-fp16.onnx' : './models/isnet-anime-fp16.onnx';
-const ISNET_PARTS = Array.from({ length: 3 }, (_, i) => `${ISNET_URL}.part${String(i).padStart(2, '0')}`);
+const ISNET_PARTS = Array.from({ length: 4 }, (_, i) => `${ISNET_URL}.part${String(i).padStart(2, '0')}`);
 const AUTO_MODEL_URLS = ['./models/person-detect.onnx', ...ISNET_PARTS];
 const SAM_MODEL_URLS = ['./models/sam-encoder.onnx', './models/sam-decoder.onnx'];
 const MATCH_MODEL_URLS = [SCENE_EMBED_MODEL_URL];
