@@ -411,6 +411,23 @@
     </div>
   </div>
 
+  <div id="entryNotice" class="entry-notice" hidden role="dialog" aria-modal="true" aria-labelledby="entryNoticeTitle">
+    <div class="entry-notice-dialog">
+      <h2 id="entryNoticeTitle">使用前小贴士</h2>
+      <ul class="entry-notice-list">
+        <li><b>内地下载模型慢？</b>模型走海外节点，直连时快时慢。建议挂梯子并选<b>日本节点</b>，实测速度明显更稳更快。基础调色不下模型也能用。</li>
+        <li><b>强烈建议「安装为应用」。</b>安装后模型<b>永久保存在本机</b>，不会被系统几天后清掉；也能像 App 一样从主屏幕一键打开、断网可用。只需下载一次。</li>
+      </ul>
+      <div id="entryNoticeIosSteps" class="entry-notice-ios" hidden>
+        <b>iPhone 安装方法：</b>点 Safari 底部中间的「分享」<span aria-hidden="true">↑</span> → 下滑选「添加到主屏幕」→ 右上角「添加」。之后从主屏幕图标进入即可。
+      </div>
+      <div class="entry-notice-actions">
+        <button id="btnNoticeInstall" class="small primary" hidden>安装为应用</button>
+        <button id="btnNoticeClose" class="small">知道了</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // 部署时由 GitHub Actions 把占位符替换成真实 commit；未注入（本地开发）则降级显示 dev
     (function () {

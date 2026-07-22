@@ -408,6 +408,17 @@ button.primary {
 }
 .export-note { font-size: 10.5px; line-height: 1.45; color: var(--muted); margin-top: -5px; }
 
+/* ---------- 进站小贴士 ---------- */
+.entry-notice { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 5vh 6vw; background: rgba(6, 8, 4, .78); }
+.entry-notice[hidden] { display: none; }
+.entry-notice-dialog { width: min(460px, 92vw); padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); box-shadow: 0 22px 80px rgba(0,0,0,.5); }
+.entry-notice-dialog h2 { margin: 0 0 14px; font-size: 19px; color: var(--text); }
+.entry-notice-list { margin: 0; padding-left: 18px; }
+.entry-notice-list li { margin-bottom: 12px; font-size: 13px; line-height: 1.55; color: var(--text); }
+.entry-notice-list b { color: var(--accent); }
+.entry-notice-ios { margin: 4px 0 6px; padding: 10px 12px; border-radius: 10px; background: var(--panel-2); font-size: 12px; line-height: 1.55; color: var(--text); }
+.entry-notice-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+
 /* ---------- 导出选择面板 ---------- */
 .export-hub { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 5vh 6vw; background: rgba(6, 8, 4, .78); }
 .export-hub[hidden] { display: none; }
