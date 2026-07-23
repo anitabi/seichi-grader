@@ -7,9 +7,10 @@ const ORT_URL = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/or
 const WASM_PATHS = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
 
 // 整站已迁到 GitHub Pages（compose.anitabi.cn 走 CNAME 指向 anitabi.github.io）。
-// 页面与模型同源，故用相对根路径，省掉跨站重定向；实测大陆直连 GitHub 速度更优。
-// 换托管改这一行即可：留空 '' = 同源；或填绝对前缀如 https://xxx/models 的父路径。
-const MODEL_BASE = '';
+// 页面与模型同源，用相对路径 '.'：无论站点在域名根（compose.anitabi.cn/）还是子路径
+// （anitabi.github.io/seichi-grader/）都能正确解析到 ./models/，省掉跨站重定向。
+// 换托管改这一行即可：'.' = 同源相对；或填绝对前缀如 https://xxx（其后接 /models/…）。
+const MODEL_BASE = '.';
 
 let ortPromise = null;
 const sessionCache = new Map(); // modelUrl -> Promise<{ort, session, ep}>
