@@ -1420,14 +1420,15 @@ $('btnExportImg').addEventListener('click', async () => {
       const sizeText = c.dataset.wasDownscaled === '1'
         ? `原裁剪 ${c.dataset.originalWidth}×${c.dataset.originalHeight}，生成 ${c.width}×${c.height}`
         : `生成 ${c.width}×${c.height} 原始分辨率`;
-      if (canShareFile && DEVICE.isAppleMobile) {
-        setStatus(`${sizeText} JPEG · 请点“保存到照片 / 分享”`);
-      } else {
-        const url = URL.createObjectURL(blob);
-        download(url, state.lastExport.name);
-        setTimeout(() => URL.revokeObjectURL(url), 5000);
-        setStatus(`${sizeText} JPEG`);
-      }
+      // 直接下载。<a download> 不需要瞬时用户激活，全分辨率渲染耗时再久也一定能存下；
+      // navigator.share 则会在激活窗口（iOS 约 5 秒）过期后抛 NotAllowedError，故不放在主路径上。
+      // iOS 存入「文件」App；想进相册再点「保存到照片 / 分享」，那次点击自带新手势。
+      const url = URL.createObjectURL(blob);
+      download(url, state.lastExport.name);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setStatus(canShareFile && DEVICE.isAppleMobile
+        ? `${sizeText} JPEG · 已存入「文件」·「保存到照片 / 分享」可存进相册`
+        : `${sizeText} JPEG`);
     } else {
       // 没有原始文件引用（不应发生）：退回导出预览画布
       const c = document.createElement('canvas');
