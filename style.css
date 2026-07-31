@@ -121,6 +121,11 @@ body {
   flex-direction: column;
   gap: 14px;
   min-height: 0;
+  /* 移动端 .col 变成 display:contents，面板直接成为 .layout 的网格项，min-width 默认 auto，
+     即「不许窄过 min-content」。而 .match-grid 是普通块级盒，overflow-x:auto 并不会把它的
+     min-content 贡献降为 0，于是找图结果的一排缩略图会把整页顶宽、所有面板一起错位。
+     归零后它才真的横向滚动。桌面端面板不是网格项，这条不生效。 */
+  min-width: 0;
 }
 
 /* 输入区 */
