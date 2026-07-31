@@ -1301,6 +1301,17 @@ function download(blobOrUrl, name) {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
+// 画布一律经 blob 导出，不要 toDataURL。iOS Safari 不认 data: URL 上的 download 属性
+// ——a.click() 等同于向 data: 顶层导航，Safari 直接拦掉，于是「其他导出全都没反应」；
+// 何况 base64 还会把几十 MB 的对比图再撑大三分之一。
+async function downloadCanvas(canvas, name, type = 'image/png', quality) {
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+  if (!blob) throw new Error('浏览器无法编码此尺寸的图片');
+  const url = URL.createObjectURL(blob);
+  download(url, name);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
 // 分块导出用它让出主线程。只用 requestAnimationFrame 的话，标签页转入后台后
 // rAF 不再触发，整个导出会冻在某一块上——手机上切去别的 App 就会遇到。
 // 这里让 rAF 和定时器赛跑：前台 rAF 先到，状态文字每块照常刷新；后台由定时器兜底跑完。
@@ -1457,7 +1468,7 @@ $('btnExportImg').addEventListener('click', async () => {
       const c = document.createElement('canvas');
       c.width = $('canvasGraded').width; c.height = $('canvasGraded').height;
       c.getContext('2d').drawImage($('canvasGraded'), 0, 0);
-      download(c.toDataURL('image/png'), 'seichi-graded.png');
+      await downloadCanvas(c, 'seichi-graded.png');
     }
   } catch (e) {
     console.error(e);
@@ -1567,14 +1578,18 @@ function makeCompareCanvas(maxWidth = 0, layoutOverride = '') {
   return out;
 }
 
-function exportCompareLayout(layoutOverride = '') {
+async function exportCompareLayout(layoutOverride = '') {
   const out = makeCompareCanvas(0, layoutOverride);
   const suffix = layoutOverride ? `-${layoutOverride}` : '';
-  download(out.toDataURL('image/png'), `seichi-compare${suffix}.png`);
+  try {
+    await downloadCanvas(out, `seichi-compare${suffix}.png`);
+  } catch (e) { setStatus('导出对比图失败：' + (e.message || e)); }
 }
 
-$('btnExportCompare').addEventListener('click', exportCompareLayout);
-$('btnExportCompareLayout').addEventListener('click', exportCompareLayout);
+// 必须包一层箭头函数：直接把 exportCompareLayout 当处理器，事件对象会顶到 layoutOverride 上，
+// 布局选择被无视（layout 取到的是 PointerEvent），文件名也会变成 -[object PointerEvent]。
+$('btnExportCompare').addEventListener('click', () => exportCompareLayout());
+$('btnExportCompareLayout').addEventListener('click', () => exportCompareLayout());
 
 // 与页面“叠加”模式一致：动画参考图按 cover 裁齐到实景画幅，透明度使用当前滑杆值。
 function makeOverlayCompareCanvas(maxWidth = 0) {
@@ -1591,10 +1606,12 @@ function makeOverlayCompareCanvas(maxWidth = 0) {
   return out;
 }
 
-function exportOverlayCompare() {
+async function exportOverlayCompare() {
   const out = makeOverlayCompareCanvas();
-  download(out.toDataURL('image/png'), 'seichi-overlay-compare.png');
-  setStatus(`已导出叠加对照图 · 动画透明度 ${$('overlayOpacity').value}%`);
+  try {
+    await downloadCanvas(out, 'seichi-overlay-compare.png');
+    setStatus(`已导出叠加对照图 · 动画透明度 ${$('overlayOpacity').value}%`);
+  } catch (e) { setStatus('导出叠加对照图失败：' + (e.message || e)); }
 }
 
 function drawExportHubPreview(canvasId, source) {
