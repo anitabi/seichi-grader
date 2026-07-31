@@ -1086,7 +1086,7 @@ async function enterAlignMode() {
   // 始终基于原始全画幅照片对齐（可反复调整，不叠加裁剪）
   const img = new Image();
   img.src = state.photo.srcUrl;
-  await img.decode();
+  await imageReady(img);
   const sc = Math.min(1, MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight));
   const c = document.createElement('canvas');
   c.width = Math.round(img.naturalWidth * sc); c.height = Math.round(img.naturalHeight * sc);
@@ -1133,7 +1133,7 @@ async function applyAlignCrop() {
   setStatus('应用构图裁剪…');
   const img = new Image();
   img.src = state.photo.srcUrl;
-  await img.decode();
+  await imageReady(img);
   const nw = img.naturalWidth, nh = img.naturalHeight;
   const sx = norm.x * nw, sy = norm.y * nh, sw = norm.w * nw, sh = norm.h * nh;
   const sc = Math.min(1, MAX_DIM / Math.max(sw, sh));
@@ -1154,7 +1154,7 @@ async function applyAlignCrop() {
 async function resetAlignCrop() {
   const img = new Image();
   img.src = state.photo.srcUrl;
-  await img.decode();
+  await imageReady(img);
   const sc = Math.min(1, MAX_DIM / Math.max(img.naturalWidth, img.naturalHeight));
   const c = document.createElement('canvas');
   c.width = Math.round(img.naturalWidth * sc); c.height = Math.round(img.naturalHeight * sc);
@@ -1301,6 +1301,29 @@ function download(blobOrUrl, name) {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
+// 分块导出用它让出主线程。只用 requestAnimationFrame 的话，标签页转入后台后
+// rAF 不再触发，整个导出会冻在某一块上——手机上切去别的 App 就会遇到。
+// 这里让 rAF 和定时器赛跑：前台 rAF 先到，状态文字每块照常刷新；后台由定时器兜底跑完。
+const nextPaint = () => new Promise((resolve) => {
+  let timer = 0, frame = 0;
+  const settle = () => { clearTimeout(timer); cancelAnimationFrame(frame); resolve(); };
+  timer = setTimeout(settle, 32);
+  frame = requestAnimationFrame(settle);
+});
+
+// 同理，隐藏文档里 img.decode() 的 Promise 也不会兑现（浏览器推迟解码），导出会卡在读图这步。
+// load 事件不受前后台影响，而 drawImage 只要求图片已加载，所以让两者赛跑：
+// 前台走 decode（解码完再画，不掉帧），后台由 load 兜底。
+function imageReady(img) {
+  const loaded = img.complete && img.naturalWidth
+    ? Promise.resolve()
+    : new Promise((resolve, reject) => {
+        img.addEventListener('load', () => resolve(), { once: true });
+        img.addEventListener('error', () => reject(new Error('无法读取原始照片')), { once: true });
+      });
+  return Promise.race([loaded, img.decode().then(() => undefined, () => loaded)]);
+}
+
 // 全分辨率导出：最终画布保持原始像素，逐块重放调色，避免同时持有整张照片的
 // 多份 ImageData/Float32Array。48MP 桌面照片可保持 8000×6000；低内存手机会
 // 明确降级而不是直接 OOM。Bloom 在 1/4 全画幅上统一生成，分块之间没有接缝。
@@ -1344,7 +1367,7 @@ function applyBloomToCanvas(canvas, gain) {
 async function renderFullRes(onStage, maxPixels = EXPORT_MAX_PIXELS) {
   const img = new Image();
   img.src = state.photo.srcUrl;
-  await img.decode();
+  await imageReady(img);
   let sx = 0, sy = 0, sw = img.naturalWidth, sh = img.naturalHeight;
   const al = state.photo.align;
   if (al) { sx = al.x * sw; sy = al.y * sh; sw *= al.w; sh *= al.h; }
@@ -1375,10 +1398,10 @@ async function renderFullRes(onStage, maxPixels = EXPORT_MAX_PIXELS) {
       ctx.putImageData(out, x, y); done++;
     }
     onStage && onStage(`全分辨率调色 ${done}/${total} · ${W}×${H}`);
-    await new Promise((r) => requestAnimationFrame(r));
+    await nextPaint();
   }
   onStage && onStage('生成全画幅辉光…');
-  await new Promise((r) => requestAnimationFrame(r));
+  await nextPaint();
   applyBloomToCanvas(c, parseInt($('bloom').value, 10) / 100);
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
   if (state.cutout && $('composite').checked) compositeCharacter(c, false);
@@ -1797,7 +1820,6 @@ function gifSubBlocks(bytes) {
 }
 
 const gifWord = (n) => Uint8Array.of(n & 255, (n >> 8) & 255);
-const nextPaint = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
 async function makeAnimeToSceneGif() {
   if (!state.anime || !state.gradedData) throw new Error('请先上传动画截图与实景照片');
