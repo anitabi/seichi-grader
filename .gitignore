@@ -33,3 +33,6 @@ models/scene-embed-fp32.onnx
 
 # 人物检测 int8 量化过程的候选文件（正式版仍使用 person-detect.onnx）
 models/person-detect-int8-test.onnx
+
+# 编辑器 / AI 助手的本地配置（如本地预览服务器定义），因机而异，不属于项目
+.claude/
