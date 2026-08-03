@@ -9,6 +9,7 @@ import { releaseAllSessions, MODEL_BASE } from './ort-env.js';
 import { embedImage, cosineSimilarity, SCENE_EMBED_MODEL_URL } from './embed.js';
 import { profile as DEVICE } from './platform.js';
 import { launchViewfinder } from './camera/viewfinder.js?v=20260718-reference-switch';
+import { launchCharacterViewfinder } from './camera/character-stage.js';
 
 const IS_MOBILE = DEVICE.isMobile;
 const MAX_DIM = DEVICE.previewMax;
@@ -34,6 +35,7 @@ const state = {
   charBase: null,      // 角色在动画帧里的基准 { relH: bbox高/帧高, cx, cy }；
                        // 构图对齐后照片≈动画取景，按原占比原位落地，100%=与动画同比例
   charLock: false,     // 固定角色：拖拽/捏合/滚轮/滑杆全部忽略，防误触（还原按钮仍有效）
+  charFlip: false,     // AR 摆拍中的左右翻转状态
   charDraw: null,      // 角色在 canvas 坐标的绘制矩形 {dx,dy,dw,dh}，用于拖拽命中
   harmonizedCache: null,
   gradeCache: null,   // 图片不变时复用统计、CDF 与天空掩膜；滑杆只重套用
@@ -217,7 +219,9 @@ function urlToImageData(url) {
         originalWidth: img.naturalWidth, originalHeight: img.naturalHeight,
       });
     };
-    img.onerror = reject; img.src = url;
+    // onerror 给的是 Event，直接抛出去会在状态栏显示成 [object Event]
+    img.onerror = () => reject(new Error('图片取不下来，可能是网络不通或对方不允许跨站取图'));
+    img.src = url;
   });
 }
 
@@ -367,6 +371,7 @@ function setCharScale(value) {
 // 还原：回到抠图时自动给出的大小（100%=与动画同比例）和动画原位
 function resetCharPlacement() {
   if (state.charBase) state.charPos = { cx: state.charBase.cx, cy: state.charBase.cy };
+  state.charFlip = false;
   setCharScale(100);
 }
 
@@ -548,7 +553,16 @@ function compositeCharacter(canvas, record = true) {
     ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
-  ctx.drawImage(ch, dx, dy, dw, dh);
+  if (state.charFlip) {
+    ctx.save();
+    ctx.translate(dx + dw / 2, 0);
+    ctx.scale(-1, 1);
+    ctx.translate(-(dx + dw / 2), 0);
+    ctx.drawImage(ch, dx, dy, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.drawImage(ch, dx, dy, dw, dh);
+  }
   if (record) state.charDraw = { dx, dy, dw, dh };
 }
 
@@ -642,6 +656,8 @@ function refreshAIEntryButtons() {
   $('btnLasso').disabled = busy || !state.anime;
   $('btnMatchScene').disabled = busy || (!state.anime && !state.photo);
   $('btnEraseMask').disabled = busy || !state.cutout;
+  const arButton = $('btnAR');
+  if (arButton) arButton.disabled = busy || !state.cutout;
   refreshCharacterResetButton();
 }
 
@@ -658,7 +674,7 @@ function prepareIndependentCutout() {
   state.cutout = null;
   state.rawAlpha = null; state.rawW = 0; state.rawH = 0; state.finalAlpha = null;
   state.maskOps = []; state.opsOverlay = null;
-  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 };
+  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 }; state.charFlip = false;
   state.harmonizedCache = null;
   setCharSeg(null);
   setCharLock(false);
@@ -676,7 +692,7 @@ function resetCharacterComposite() {
   state.cutout = null;
   state.rawAlpha = null; state.rawW = 0; state.rawH = 0; state.finalAlpha = null;
   state.maskOps = []; state.opsOverlay = null;
-  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 };
+  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 }; state.charFlip = false;
   state.harmonizedCache = null;
   setCharSeg(null);
   $('maskThr').value = 110; $('maskThrVal').textContent = '110';
@@ -739,6 +755,7 @@ function applyRefine(resetPos) {
   // 新抠图默认按动画里的原位、原比例落地（照片已与动画同构图），拖拽/滑杆仍可自由调整
   if (resetPos) {
     state.charPos = state.charBase ? { cx: state.charBase.cx, cy: state.charBase.cy } : { cx: 0.5, cy: 0.62 };
+    state.charFlip = false;
     setCharScale(100);
   }
   redrawComposite();
@@ -780,6 +797,7 @@ async function handleAnimeData(data) {
   renderPalette(extractPalette(data.imgData, 6, 4, { ignoreBottomRatio: $('ignoreSub').checked ? 0.12 : 0 }));
   state.cutout = null; state.rawAlpha = null; setCharSeg(null); invalidateHarmonize();
   state.maskOps = []; state.opsOverlay = null; state.finalAlpha = null;
+  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 }; state.charFlip = false;
   refreshMaskUndoButtons();
   refreshAIEntryButtons();
   $('matchResults').hidden = true; // 旧结果按旧截图排序，换截图后作废
@@ -3388,7 +3406,49 @@ $('btnShoot').addEventListener('click', async () => {
   }
 });
 
-window.__qa = { state, renderFullRes, enterAlignMode, applyAlignCrop, alignState, recompute, runLassoBox, launchViewfinder, makeAnimeToSceneGif, makeAnimeToSceneApng, undoMaskOp, growRegionAt, contourInteriorIndices, magneticSnap, ensureEdgeCost, lassoState };
+// ---------- 2D AR 角色摆拍 ----------
+// 取景器只返回实景帧和归一化角色状态；角色本身仍由当前页面的高清合成链路
+// 绘制，这样 AR 预览不会降低最终成片，也不会与调色后的角色重复叠加。
+$('btnAR').addEventListener('click', async () => {
+  if (!state.cutout || !state.charBase) {
+    setStatus('请先完成角色抠图');
+    return;
+  }
+  const btn = $('btnAR');
+  btn.disabled = true;
+  try {
+    const baseRelH = state.charBase.relH || 0.45;
+    const currentRelH = baseRelH * (parseInt($('charScale').value, 10) || 100) / 100;
+    const result = await launchCharacterViewfinder(state.cutout, {
+      initial: {
+        cx: state.charPos.cx,
+        cy: state.charPos.cy,
+        relH: currentRelH,
+        flip: state.charFlip,
+      },
+    });
+    if (!result?.canvas) return;
+    const p = result.placement || {};
+    state.charPos = {
+      cx: Math.max(0, Math.min(1, Number(p.cx ?? state.charPos.cx))),
+      cy: Math.max(0, Math.min(1, Number(p.cy ?? state.charPos.cy))),
+    };
+    state.charFlip = !!p.flip;
+    setCharScale((Number(p.relH || currentRelH) / baseRelH) * 100);
+    const data = await canvasToPhotoData(result.canvas);
+    $('thumbPhoto').src = data.url; $('thumbPhoto').hidden = false;
+    await handlePhotoData(data);
+    setStatus('AR 摆拍完成 · 角色已保留，可继续调色和微调位置');
+  } catch (e) {
+    console.error(e); rememberError('character-ar', e);
+    setStatus('AR 摆拍失败：' + (e.message || e));
+  } finally {
+    btn.disabled = false;
+    refreshAIEntryButtons();
+  }
+});
+
+window.__qa = { state, renderFullRes, enterAlignMode, applyAlignCrop, alignState, recompute, runLassoBox, launchViewfinder, launchCharacterViewfinder, makeAnimeToSceneGif, makeAnimeToSceneApng, undoMaskOp, growRegionAt, contourInteriorIndices, magneticSnap, ensureEdgeCost, lassoState };
 
 // 隐藏的开发验收入口：http://localhost:8126/?qa-demo=1
 if (new URLSearchParams(location.search).has('qa-demo')) {

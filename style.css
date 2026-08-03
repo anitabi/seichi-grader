@@ -561,6 +561,7 @@ button.small { padding: 5px 12px; font-size: 12px; border-radius: 8px; }
 /* 现场取景按钮 */
 .shoot-btn { width: 100%; margin: 8px 0 0; border-color: #007ea7; color: #66caee; }
 .shoot-btn:not(:disabled):active { background: #cddde7; }
+.ar-entry:not(:disabled) { border-color: #35c4ef; color: #b9f0ff; background: rgba(0, 126, 167, .12); }
 
 .match-results { margin-top: 10px; }
 .match-results > label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 8px; }

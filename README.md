@@ -12,6 +12,7 @@
 - 预览保持 1400px 流畅，导出时在原始分辨率上分块重放同一套调色
 - 洋葱皮构图对齐：拖拽、缩放、裁剪后再进入调色
 - 角色合成去色渗、光照融合、可调软阴影与颗粒匹配
+- 2D AR 角色摆拍：透明角色叠加到手机取景器，支持拖动、捏合、单手近远控制与低清运动跟踪
 - 参数自动恢复、按作品保存风格预设
 - 基础调色无需 AI 下载；自动抠图与 SAM 兜底可分别按需缓存为离线包，下载中断后可继续
 - 手机端内存保护、HEIC 明确提示与 EXIF 方向校正
@@ -66,6 +67,7 @@ http://localhost:8126/
 - `models/person-detect.onnx`：人物检测模型（deepghs/anime_person_detection，static-int8）
 - `models/scene-embed-int8.onnx`：动画截图与实景图匹配模型（DINOv3 ViT-S/16）
 - `sam-segment.js`：SlimSAM 点提示分割（ISNet 抠不出的小角色自动兜底）
+- `camera/character-stage.js`：轻量 2D AR 角色舞台；不依赖 3D/WebXR，自动近远为低清纹理运动估计，失败时可手动操纵
 - `models/sam-encoder.onnx` / `models/sam-decoder.onnx`：SAM 模型（Xenova/slimsam-77-uniform）
 - `THIRD_PARTY_LICENSES.md`：模型与运行时许可来源
 - `DEPLOYMENT.md`：公开部署、响应头与素材排除清单
