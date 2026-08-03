@@ -658,9 +658,13 @@ function refreshAIEntryButtons() {
   $('btnEraseMask').disabled = busy || !state.cutout;
   const arButton = $('btnAR');
   if (arButton) {
-    arButton.disabled = busy || !state.anime;
-    arButton.textContent = state.cutout ? '🧍 AR 角色摆拍（靠近变大）' : '🧍 先框选角色再 AR 摆拍';
-    arButton.title = state.cutout ? '打开手机取景器摆放角色' : '点击后先进入圈选抠图，完成后再进入 AR 取景';
+    arButton.disabled = busy;
+    arButton.textContent = state.cutout
+      ? '🧍 AR 角色摆拍（靠近变大）'
+      : state.anime ? '🧍 先框选角色再 AR 摆拍' : '🧍 AR 角色摆拍（先上传动画）';
+    arButton.title = state.cutout
+      ? '打开手机取景器摆放角色'
+      : state.anime ? '点击后先进入圈选抠图，完成后再进入 AR 取景' : '请先上传动画截图';
   }
   refreshCharacterResetButton();
 }
