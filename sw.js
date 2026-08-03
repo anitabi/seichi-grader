@@ -2,11 +2,11 @@
 // ONNX 模型与 onnxruntime-web 运行时采用 cache-first；它们仅在用户按需下载离线包
 // 或实际运行 AI 时进入 Cache Storage。其余请求不拦截（开发时改代码即时生效）。
 const CACHE = 'seichi-models-v8'; // v8: 模型改同源加载（整站迁 GitHub Pages），旧 github.io 缓存键作废
-const APP_CACHE = 'seichi-app-v37'; // v37: 加入轻量 2D AR 角色摆拍模块
+const APP_CACHE = 'seichi-app-v38'; // v38: 地面 AR（WebXR / AR Quick Look）
 const APP_SHELL = [
   './', './index.html', './style.css', './app.js', './color.js', './segment.js',
   './ai-segment.js', './detect.js', './sam-segment.js', './ort-env.js', './platform.js', './canvas-util.js', './ai-worker.js', './embed.js',
-  './camera/camera-session.js', './camera/overlay-renderer.js', './camera/capture-adapter.js', './camera/viewfinder.js', './camera/character-stage.js',
+  './camera/camera-session.js', './camera/overlay-renderer.js', './camera/capture-adapter.js', './camera/viewfinder.js', './camera/ground-ar.js',
   './manifest.webmanifest', './icon.svg', './icon-180.png',
 ];
 const SHOULD_CACHE = (url) => /\/models\/.+\.onnx(\.part\d+)?($|\?)|cdn\.jsdelivr\.net\/npm\/onnxruntime-web/.test(url);

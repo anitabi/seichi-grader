@@ -9,7 +9,7 @@ import { releaseAllSessions, MODEL_BASE } from './ort-env.js';
 import { embedImage, cosineSimilarity, SCENE_EMBED_MODEL_URL } from './embed.js';
 import { profile as DEVICE } from './platform.js';
 import { launchViewfinder } from './camera/viewfinder.js?v=20260718-reference-switch';
-import { launchCharacterViewfinder } from './camera/character-stage.js';
+import { launchGroundAR } from './camera/ground-ar.js?v=20260803-ground-ar';
 
 const IS_MOBILE = DEVICE.isMobile;
 const MAX_DIM = DEVICE.previewMax;
@@ -660,11 +660,11 @@ function refreshAIEntryButtons() {
   if (arButton) {
     arButton.disabled = busy;
     arButton.textContent = state.cutout
-      ? '🧍 AR 角色摆拍（靠近变大）'
-      : state.anime ? '🧍 先框选角色再 AR 摆拍' : '🧍 AR 角色摆拍（先上传动画）';
+      ? '🧍 地面 AR 摆拍（扫描地面）'
+      : state.anime ? '🧍 先框选角色再进入地面 AR' : '🧍 地面 AR 摆拍（先上传动画）';
     arButton.title = state.cutout
-      ? '打开手机取景器摆放角色'
-      : state.anime ? '点击后先进入圈选抠图，完成后再进入 AR 取景' : '请先上传动画截图';
+      ? '调用系统空间追踪，扫描地面后放置角色'
+      : state.anime ? '点击后先进入圈选抠图，完成后再扫描地面' : '请先上传动画截图';
   }
   refreshCharacterResetButton();
 }
@@ -3414,15 +3414,15 @@ $('btnShoot').addEventListener('click', async () => {
   }
 });
 
-// ---------- 2D AR 角色摆拍 ----------
-// 取景器只返回实景帧和归一化角色状态；角色本身仍由当前页面的高清合成链路
-// 绘制，这样 AR 预览不会降低最终成片，也不会与调色后的角色重复叠加。
+// ---------- 系统地面 AR 角色摆拍 ----------
+// 抠图结果会被即时包装为一个四顶点透明立牌：Android 走 WebXR/ARCore，
+// iPhone 走 AR Quick Look。放置和透视变化都由系统空间追踪完成。
 $('btnAR').addEventListener('click', async () => {
   if (!state.cutout || !state.charBase) {
     if (state.anime) {
       prepareIndependentCutout();
       openLasso('algorithm');
-      setStatus('请先在动画截图上框住角色；完成圈选抠图后即可进入 AR 摆拍');
+      setStatus('请先在动画截图上框住角色；完成圈选抠图后即可扫描地面');
     } else {
       setStatus('请先上传动画截图');
     }
@@ -3431,38 +3431,19 @@ $('btnAR').addEventListener('click', async () => {
   const btn = $('btnAR');
   btn.disabled = true;
   try {
-    const baseRelH = state.charBase.relH || 0.45;
-    const currentRelH = baseRelH * (parseInt($('charScale').value, 10) || 100) / 100;
-    const result = await launchCharacterViewfinder(state.cutout, {
-      initial: {
-        cx: state.charPos.cx,
-        cy: state.charPos.cy,
-        relH: currentRelH,
-        flip: state.charFlip,
-      },
-    });
-    if (!result?.canvas) return;
-    const p = result.placement || {};
-    state.charPos = {
-      cx: Math.max(0, Math.min(1, Number(p.cx ?? state.charPos.cx))),
-      cy: Math.max(0, Math.min(1, Number(p.cy ?? state.charPos.cy))),
-    };
-    state.charFlip = !!p.flip;
-    setCharScale((Number(p.relH || currentRelH) / baseRelH) * 100);
-    const data = await canvasToPhotoData(result.canvas);
-    $('thumbPhoto').src = data.url; $('thumbPhoto').hidden = false;
-    await handlePhotoData(data);
-    setStatus('AR 摆拍完成 · 角色已保留，可继续调色和微调位置');
+    setStatus('正在准备系统地面 AR…');
+    await launchGroundAR(state.cutout, { heightMeters: 1.65 });
+    setStatus('已退出地面 AR');
   } catch (e) {
-    console.error(e); rememberError('character-ar', e);
-    setStatus('AR 摆拍失败：' + (e.message || e));
+    console.error(e); rememberError('ground-ar', e);
+    setStatus('地面 AR 启动失败：' + (e.message || e));
   } finally {
     btn.disabled = false;
     refreshAIEntryButtons();
   }
 });
 
-window.__qa = { state, renderFullRes, enterAlignMode, applyAlignCrop, alignState, recompute, runLassoBox, launchViewfinder, launchCharacterViewfinder, makeAnimeToSceneGif, makeAnimeToSceneApng, undoMaskOp, growRegionAt, contourInteriorIndices, magneticSnap, ensureEdgeCost, lassoState };
+window.__qa = { state, renderFullRes, enterAlignMode, applyAlignCrop, alignState, recompute, runLassoBox, launchViewfinder, launchGroundAR, makeAnimeToSceneGif, makeAnimeToSceneApng, undoMaskOp, growRegionAt, contourInteriorIndices, magneticSnap, ensureEdgeCost, lassoState };
 
 // 隐藏的开发验收入口：http://localhost:8126/?qa-demo=1
 if (new URLSearchParams(location.search).has('qa-demo')) {
