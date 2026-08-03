@@ -657,7 +657,11 @@ function refreshAIEntryButtons() {
   $('btnMatchScene').disabled = busy || (!state.anime && !state.photo);
   $('btnEraseMask').disabled = busy || !state.cutout;
   const arButton = $('btnAR');
-  if (arButton) arButton.disabled = busy || !state.cutout;
+  if (arButton) {
+    arButton.disabled = busy || !state.anime;
+    arButton.textContent = state.cutout ? '🧍 AR 角色摆拍（靠近变大）' : '🧍 先框选角色再 AR 摆拍';
+    arButton.title = state.cutout ? '打开手机取景器摆放角色' : '点击后先进入圈选抠图，完成后再进入 AR 取景';
+  }
   refreshCharacterResetButton();
 }
 
@@ -3411,7 +3415,13 @@ $('btnShoot').addEventListener('click', async () => {
 // 绘制，这样 AR 预览不会降低最终成片，也不会与调色后的角色重复叠加。
 $('btnAR').addEventListener('click', async () => {
   if (!state.cutout || !state.charBase) {
-    setStatus('请先完成角色抠图');
+    if (state.anime) {
+      prepareIndependentCutout();
+      openLasso('algorithm');
+      setStatus('请先在动画截图上框住角色；完成圈选抠图后即可进入 AR 摆拍');
+    } else {
+      setStatus('请先上传动画截图');
+    }
     return;
   }
   const btn = $('btnAR');
