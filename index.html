@@ -64,9 +64,7 @@
             <strong>① 动画截图</strong>
             <span class="hint">取风格</span>
           </div>
-          <!-- 从 anitabi 跳转进来时 src 是跨源地址；本站开着 COEP: require-corp，
-               不带 crossorigin 的跨源图会被拦成裂图（本机上传的 blob: 不受影响） -->
-          <img class="thumb" id="thumbAnime" crossorigin="anonymous" alt="" hidden />
+          <img class="thumb" id="thumbAnime" alt="" hidden />
         </div>
         <div class="drop" id="dropPhoto">
           <input type="file" id="filePhoto" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" hidden />
@@ -78,7 +76,6 @@
         </div>
       </div>
       <button id="btnShoot" class="ghost shoot-btn">📷 现场取景拍摄（预览辅助线）</button>
-      <button id="btnAR" class="ghost shoot-btn ar-entry">🧍 地面 AR 摆拍（先上传动画）</button>
       <div class="match-entry">
         <div class="button-load-row">
           <button id="btnMatchScene" class="ghost shoot-btn" disabled>🔍 匹配对应照片</button>
@@ -456,6 +453,6 @@
       }
     })();
   </script>
-  <script type="module" src="./app.js?v=20260803-ground-ar"></script>
+  <script type="module" src="./app.js?v=20260731-blob-export"></script>
 </body>
 </html>

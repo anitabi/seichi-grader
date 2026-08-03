@@ -9,7 +9,6 @@ import { releaseAllSessions, MODEL_BASE } from './ort-env.js';
 import { embedImage, cosineSimilarity, SCENE_EMBED_MODEL_URL } from './embed.js';
 import { profile as DEVICE } from './platform.js';
 import { launchViewfinder } from './camera/viewfinder.js?v=20260718-reference-switch';
-import { launchGroundAR } from './camera/ground-ar.js?v=20260803-ground-ar';
 
 const IS_MOBILE = DEVICE.isMobile;
 const MAX_DIM = DEVICE.previewMax;
@@ -35,7 +34,6 @@ const state = {
   charBase: null,      // 角色在动画帧里的基准 { relH: bbox高/帧高, cx, cy }；
                        // 构图对齐后照片≈动画取景，按原占比原位落地，100%=与动画同比例
   charLock: false,     // 固定角色：拖拽/捏合/滚轮/滑杆全部忽略，防误触（还原按钮仍有效）
-  charFlip: false,     // AR 摆拍中的左右翻转状态
   charDraw: null,      // 角色在 canvas 坐标的绘制矩形 {dx,dy,dw,dh}，用于拖拽命中
   harmonizedCache: null,
   gradeCache: null,   // 图片不变时复用统计、CDF 与天空掩膜；滑杆只重套用
@@ -219,9 +217,7 @@ function urlToImageData(url) {
         originalWidth: img.naturalWidth, originalHeight: img.naturalHeight,
       });
     };
-    // onerror 给的是 Event，直接抛出去会在状态栏显示成 [object Event]
-    img.onerror = () => reject(new Error('图片取不下来，可能是网络不通或对方不允许跨站取图'));
-    img.src = url;
+    img.onerror = reject; img.src = url;
   });
 }
 
@@ -371,7 +367,6 @@ function setCharScale(value) {
 // 还原：回到抠图时自动给出的大小（100%=与动画同比例）和动画原位
 function resetCharPlacement() {
   if (state.charBase) state.charPos = { cx: state.charBase.cx, cy: state.charBase.cy };
-  state.charFlip = false;
   setCharScale(100);
 }
 
@@ -553,16 +548,7 @@ function compositeCharacter(canvas, record = true) {
     ctx.beginPath(); ctx.arc(0, 0, rx, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
-  if (state.charFlip) {
-    ctx.save();
-    ctx.translate(dx + dw / 2, 0);
-    ctx.scale(-1, 1);
-    ctx.translate(-(dx + dw / 2), 0);
-    ctx.drawImage(ch, dx, dy, dw, dh);
-    ctx.restore();
-  } else {
-    ctx.drawImage(ch, dx, dy, dw, dh);
-  }
+  ctx.drawImage(ch, dx, dy, dw, dh);
   if (record) state.charDraw = { dx, dy, dw, dh };
 }
 
@@ -656,16 +642,6 @@ function refreshAIEntryButtons() {
   $('btnLasso').disabled = busy || !state.anime;
   $('btnMatchScene').disabled = busy || (!state.anime && !state.photo);
   $('btnEraseMask').disabled = busy || !state.cutout;
-  const arButton = $('btnAR');
-  if (arButton) {
-    arButton.disabled = busy;
-    arButton.textContent = state.cutout
-      ? '🧍 地面 AR 摆拍（扫描地面）'
-      : state.anime ? '🧍 先框选角色再进入地面 AR' : '🧍 地面 AR 摆拍（先上传动画）';
-    arButton.title = state.cutout
-      ? '调用系统空间追踪，扫描地面后放置角色'
-      : state.anime ? '点击后先进入圈选抠图，完成后再扫描地面' : '请先上传动画截图';
-  }
   refreshCharacterResetButton();
 }
 
@@ -682,7 +658,7 @@ function prepareIndependentCutout() {
   state.cutout = null;
   state.rawAlpha = null; state.rawW = 0; state.rawH = 0; state.finalAlpha = null;
   state.maskOps = []; state.opsOverlay = null;
-  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 }; state.charFlip = false;
+  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 };
   state.harmonizedCache = null;
   setCharSeg(null);
   setCharLock(false);
@@ -700,7 +676,7 @@ function resetCharacterComposite() {
   state.cutout = null;
   state.rawAlpha = null; state.rawW = 0; state.rawH = 0; state.finalAlpha = null;
   state.maskOps = []; state.opsOverlay = null;
-  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 }; state.charFlip = false;
+  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 };
   state.harmonizedCache = null;
   setCharSeg(null);
   $('maskThr').value = 110; $('maskThrVal').textContent = '110';
@@ -763,7 +739,6 @@ function applyRefine(resetPos) {
   // 新抠图默认按动画里的原位、原比例落地（照片已与动画同构图），拖拽/滑杆仍可自由调整
   if (resetPos) {
     state.charPos = state.charBase ? { cx: state.charBase.cx, cy: state.charBase.cy } : { cx: 0.5, cy: 0.62 };
-    state.charFlip = false;
     setCharScale(100);
   }
   redrawComposite();
@@ -805,7 +780,6 @@ async function handleAnimeData(data) {
   renderPalette(extractPalette(data.imgData, 6, 4, { ignoreBottomRatio: $('ignoreSub').checked ? 0.12 : 0 }));
   state.cutout = null; state.rawAlpha = null; setCharSeg(null); invalidateHarmonize();
   state.maskOps = []; state.opsOverlay = null; state.finalAlpha = null;
-  state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 }; state.charFlip = false;
   refreshMaskUndoButtons();
   refreshAIEntryButtons();
   $('matchResults').hidden = true; // 旧结果按旧截图排序，换截图后作废
@@ -3414,36 +3388,7 @@ $('btnShoot').addEventListener('click', async () => {
   }
 });
 
-// ---------- 系统地面 AR 角色摆拍 ----------
-// 抠图结果会被即时包装为一个四顶点透明立牌：Android 走 WebXR/ARCore，
-// iPhone 走 AR Quick Look。放置和透视变化都由系统空间追踪完成。
-$('btnAR').addEventListener('click', async () => {
-  if (!state.cutout || !state.charBase) {
-    if (state.anime) {
-      prepareIndependentCutout();
-      openLasso('algorithm');
-      setStatus('请先在动画截图上框住角色；完成圈选抠图后即可扫描地面');
-    } else {
-      setStatus('请先上传动画截图');
-    }
-    return;
-  }
-  const btn = $('btnAR');
-  btn.disabled = true;
-  try {
-    setStatus('正在准备系统地面 AR…');
-    await launchGroundAR(state.cutout, { heightMeters: 1.65 });
-    setStatus('已退出地面 AR');
-  } catch (e) {
-    console.error(e); rememberError('ground-ar', e);
-    setStatus('地面 AR 启动失败：' + (e.message || e));
-  } finally {
-    btn.disabled = false;
-    refreshAIEntryButtons();
-  }
-});
-
-window.__qa = { state, renderFullRes, enterAlignMode, applyAlignCrop, alignState, recompute, runLassoBox, launchViewfinder, launchGroundAR, makeAnimeToSceneGif, makeAnimeToSceneApng, undoMaskOp, growRegionAt, contourInteriorIndices, magneticSnap, ensureEdgeCost, lassoState };
+window.__qa = { state, renderFullRes, enterAlignMode, applyAlignCrop, alignState, recompute, runLassoBox, launchViewfinder, makeAnimeToSceneGif, makeAnimeToSceneApng, undoMaskOp, growRegionAt, contourInteriorIndices, magneticSnap, ensureEdgeCost, lassoState };
 
 // 隐藏的开发验收入口：http://localhost:8126/?qa-demo=1
 if (new URLSearchParams(location.search).has('qa-demo')) {

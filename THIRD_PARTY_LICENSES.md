@@ -8,7 +8,6 @@
 | ISNet Anime | `models/isnet-anime-fp16.onnx`, `models/isnet-anime-512-fp16.onnx` | [SkyTNT/anime-segmentation](https://github.com/SkyTNT/anime-segmentation) / [模型仓库](https://huggingface.co/skytnt/anime-seg) | **权重许可未标注**；代码仓库为 Apache-2.0 | **公开发布阻塞项**：不能只凭训练代码仓库的 Apache-2.0 就断言 ONNX 权重可再分发。需取得权重作者的明确许可，或替换为模型卡明确标注可再分发许可的权重。 |
 | SlimSAM 77 uniform | `models/sam-encoder.onnx`, `models/sam-decoder.onnx` | [Xenova/slimsam-77-uniform](https://huggingface.co/Xenova/slimsam-77-uniform) | Apache-2.0 | 可再分发，需附 Apache-2.0、保留 NOTICE/修改说明（如有） |
 | ONNX Runtime Web | CDN 运行时 | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) | MIT | 可使用 CDN；发布时保留第三方声明 |
-| `<model-viewer>` 4.3.1 | 地面 AR 时从 CDN 按需加载 | [google/model-viewer](https://github.com/google/model-viewer) | Apache-2.0 | 仅在进入地面 AR 时加载；负责 Android WebXR 与 iOS Quick Look/USDZ 转换，需保留 Apache-2.0 声明 |
 | DINOv3 ViT-S/16（找图匹配） | `models/scene-embed-int8.onnx` | [Meta DINOv3](https://ai.meta.com/resources/models-and-libraries/dinov3/)，经 [timm `vit_small_patch16_dinov3.lvd1689m`](https://huggingface.co/timm/vit_small_patch16_dinov3.lvd1689m) 导出（见 `tools/build-scene-embed.py`） | [DINOv3 License](https://ai.meta.com/resources/models-and-libraries/dinov3-license/) | 可再分发；需随发布包提供该许可协议，并在相关网站/UI 的显著位置显示「Built with DINOv3」，同时注明「由原权重转换为 int8 ONNX」 |
 
 ## 2026-07-13 核查结论
