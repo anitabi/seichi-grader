@@ -9,6 +9,7 @@ import { releaseAllSessions, MODEL_BASE } from './ort-env.js';
 import { embedImage, cosineSimilarity, SCENE_EMBED_MODEL_URL } from './embed.js';
 import { profile as DEVICE } from './platform.js';
 import { launchViewfinder } from './camera/viewfinder.js?v=20260718-reference-switch';
+import './model-mirrors.js?v=20260928'; // 设置 self.SEICHI_MODEL_MIRRORS，sw.js 也读同一份
 
 const IS_MOBILE = DEVICE.isMobile;
 const MAX_DIM = DEVICE.previewMax;
@@ -37,7 +38,7 @@ const state = {
   charDraw: null,      // 角色在 canvas 坐标的绘制矩形 {dx,dy,dw,dh}，用于拖拽命中
   harmonizedCache: null,
   gradeCache: null,   // 图片不变时复用统计、CDF 与天空掩膜；滑杆只重套用
-  lastExport: null,   // iOS 二次用户手势分享用 { blob, name, width, height }
+  lastExport: null,   // 最近一次导出 { blob, name }：结果卡片的分享/再次下载用
   aiBusy: false,
 };
 
@@ -51,7 +52,26 @@ if (DEVICE.isAndroid) {
   });
 }
 
-const setStatus = (t) => { $('status').textContent = t; };
+// 手机单列布局里状态栏在页面最底端，导出失败、载入进度都看不见。
+// 状态栏不在视口内（或被弹窗盖住）时，同一句话再用顶部浮条提示一次。
+function inViewport(el) {
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.bottom > 0 && r.top < window.innerHeight;
+}
+const anyModalOpen = () => !$('lassoModal').hidden || !$('exportHubModal').hidden;
+let toastTimer = 0;
+function showToast(text) {
+  const toast = $('toast');
+  toast.textContent = text;
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.hidden = true; }, Math.min(7000, 2400 + text.length * 50));
+}
+// quiet：拖滑杆时的例行重算只更新状态栏，不每动一下就弹浮条
+const setStatus = (t, { quiet = false } = {}) => {
+  $('status').textContent = t;
+  if (!quiet && (anyModalOpen() || !inViewport($('status')))) showToast(t);
+};
 // 耗时操作的总状态仍保留在页面底部，但下载/推理进度也紧贴触发按钮，
 // 让用户不用在面板里寻找“刚才点的按钮到底有没有反应”。
 function setButtonLoad(id, text = '') {
@@ -202,22 +222,31 @@ async function readExifGPS(file) {
 }
 
 // 开发验收/演示素材走同一条读取路径，避免另写一套“看起来能跑”的测试逻辑。
-function urlToImageData(url) {
+// 网络差时图片可能既不成功也不失败地一直挂着，给个超时，好让界面能提示重试。
+// localCopy：返回的 url 换成本地 blob（远程截图用；演示照片要保留原地址供全分辨率导出）。
+function urlToImageData(url, { timeoutMs = 25_000, localCopy = false } = {}) {
   return new Promise((resolve, reject) => {
     const img = new Image();
+    const timer = setTimeout(() => { img.src = ''; reject(new Error('图片载入超时，网络较慢')); }, timeoutMs);
     img.crossOrigin = 'anonymous'; // 跨域图（如 anitabi CDN）需带 CORS 才能读像素；同源无副作用
     img.onload = () => {
+      clearTimeout(timer);
       let { width, height } = img;
       const scale = Math.min(1, MAX_DIM / Math.max(width, height));
       width = Math.round(width * scale); height = Math.round(height * scale);
       const c = document.createElement('canvas'); c.width = width; c.height = height;
       const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0, width, height);
-      resolve({
+      const data = {
         imgData: ctx.getImageData(0, 0, width, height), width, height, url,
         originalWidth: img.naturalWidth, originalHeight: img.naturalHeight,
-      });
+      };
+      if (!localCopy) { resolve(data); return; }
+      // 缩略图 / 对齐虚影用本地 blob，而不是再请求一遍远程图：省一次下载，
+      // 也不依赖图床是否带 CORP 头（页面开了 COEP，不带 crossorigin 的跨域 <img> 需要它）
+      c.toBlob((blob) => resolve({ ...data, url: blob ? URL.createObjectURL(blob) : url }), 'image/jpeg', 0.9);
     };
-    img.onerror = reject; img.src = url;
+    img.onerror = () => { clearTimeout(timer); reject(new Error('图片无法读取（网络中断或服务器拒绝跨域）')); };
+    img.src = url;
   });
 }
 
@@ -307,7 +336,8 @@ function buildTransforms(cache) {
 }
 
 // 核心：重新计算调色（重活），再重绘合成（轻活）。
-function recompute() {
+// 也直接用作 change 事件处理器，所以参数可能是 Event；只认 quiet === true。
+function recompute(opts) {
   if (!state.anime || !state.photo) return;
   const mode = $('mode').value;
   const cache = getGradeCache();
@@ -333,13 +363,13 @@ function recompute() {
   ['btnOpenExportHub', 'btnExportImg', 'btnExportCompare', 'btnExportCompareLayout', 'btnExportWipe', 'btnExportMorph', 'btnExportApng', 'btnExportLut', 'btnBatchExport'].forEach(id => $(id).disabled = false);
   updateWorkflow();
   const modeText = mode === 'tone' ? '影调+色彩' : mode === 'full' ? '完整' : '仅色彩';
-  setStatus(`已调色 · ${modeText} · 强度 ${$('strength').value}% · 天空分区：${useRegion ? '已启用' : `未启用（${skyReason}）`}`);
+  setStatus(`已调色 · ${modeText} · 强度 ${$('strength').value}% · 天空分区：${useRegion ? '已启用' : `未启用（${skyReason}）`}`, { quiet: opts?.quiet === true });
 }
 
 let gradeFrame = 0;
 function scheduleRecompute() {
   cancelAnimationFrame(gradeFrame);
-  gradeFrame = requestAnimationFrame(() => { gradeFrame = 0; recompute(); });
+  gradeFrame = requestAnimationFrame(() => { gradeFrame = 0; recompute({ quiet: true }); });
 }
 
 // 轻活：把缓存的 gradedData 重画到调色后 canvas，再叠角色（拖拽/缩放时只跑这个）
@@ -378,10 +408,24 @@ function setCharLock(locked) {
   $('btnCharLock').classList.toggle('lock-on', locked);
 }
 
+// 手机单列布局下预览框原本固定 320px 高：竖拍照片只剩一小条，横图上下又空一大截。
+// 这里按当前画面比例定高（最多占屏幕 72%），桌面三栏布局不受影响。
+const singleColumn = matchMedia('(max-width: 900px)');
+function fitCompareHeight() {
+  const compare = $('compare'), g = $('canvasGraded');
+  if (!singleColumn.matches || !g.width || !g.height) { compare.style.height = ''; return; }
+  let ratio = g.height / g.width;
+  const anime = $('canvasAnimeStack');
+  if (compare.classList.contains('compare-stack-mode') && anime.width) ratio += anime.height / anime.width;
+  const h = Math.min(window.innerHeight * 0.72, Math.max(220, compare.clientWidth * ratio));
+  compare.style.height = Math.round(h) + 'px';
+}
+
 // 让两个叠放的 canvas 在容器内等比同尺寸显示。
 // 尺寸以 canvasGraded 当前像素尺寸为准：普通模式=照片尺寸，对齐模式=动画宽高比画布。
 function syncCanvasSize() {
   const compare = $('compare');
+  fitCompareHeight();
   const cw = compare.clientWidth, ch = compare.clientHeight;
   const iw = $('canvasGraded').width || state.photo.width, ih = $('canvasGraded').height || state.photo.height;
   const scale = Math.min(cw / iw, ch / ih);
@@ -772,6 +816,7 @@ function bindDrop(dropId, inputId, thumbId, onLoad) {
 }
 
 async function handleAnimeData(data) {
+  setMapLoad(''); // 换了截图，巡礼点载入提示作废（地图载入成功后会再写回）
   if (state.anime?.srcUrl?.startsWith('blob:')) URL.revokeObjectURL(state.anime.srcUrl);
   state.anime = {
     imgData: data.imgData, width: data.width, height: data.height, srcUrl: data.url,
@@ -810,34 +855,90 @@ bindDrop('dropAnime', 'fileAnime', 'thumbAnime', handleAnimeData);
 bindDrop('dropPhoto', 'filePhoto', 'thumbPhoto', handlePhotoData);
 
 // 从 anitabi 地图跳转载入：?url=<巡礼点动画截图>，可选 name/bid/pid/g 作展示与预设标识。
+// 只带 bid+pid、没有 url 时，按巡礼点 id 向 anitabi 公开接口查截图地址。
 // 仅接受 https 且 anitabi.cn 域名的图，避免被构造链接载入任意外部图片。
+const isAnitabiImage = (u) => u.protocol === 'https:' && /(^|\.)anitabi\.cn$/i.test(u.hostname);
+
+// 地图里的截图常带 ?plan=h160 之类的缩略图参数：160px 高的图拿来调色、抠像、对齐都太糊。
+// 先试去掉参数的原图，取不到再退回链接原样。
+function anitabiImageCandidates(u) {
+  const out = [];
+  if (u.searchParams.has('plan')) {
+    const full = new URL(u.href);
+    full.searchParams.delete('plan');
+    out.push(full.href);
+  }
+  out.push(u.href);
+  return out;
+}
+
+async function lookupAnitabiPoint(bid, pid) {
+  const resp = await fetch(`https://api.anitabi.cn/bangumi/${encodeURIComponent(bid)}/points/detail?haveImage=true`, { credentials: 'omit' });
+  if (!resp.ok) throw new Error(`anitabi 接口返回 ${resp.status}`);
+  const body = await resp.json();
+  const points = Array.isArray(body) ? body : (body?.points || body?.litePoints || []);
+  const point = points.find((item) => String(item?.id) === String(pid));
+  if (!point?.image) throw new Error('这个巡礼点还没有动画截图');
+  return { url: point.image, name: point.cn || point.name || '' };
+}
+
+function setMapLoad(text, { failed = false, done = false } = {}) {
+  const box = $('mapLoad');
+  box.hidden = !text;
+  box.classList.toggle('failed', failed);
+  box.classList.toggle('done', done);
+  $('mapLoadText').textContent = text;
+  $('btnMapRetry').hidden = !failed;
+}
+
+let mapLoading = false;
 async function loadFromQuery() {
   const params = new URLSearchParams(location.search);
-  const url = params.get('url');
-  if (!url) return;
-  let u;
-  try { u = new URL(url); } catch { return; }
-  if (u.protocol !== 'https:' || !/(^|\.)anitabi\.cn$/i.test(u.hostname)) {
-    console.warn('忽略不受信任的跳转图片来源：', url); // 静默回到空状态，不打断正常上传引导
-    return;
-  }
-  const name = params.get('name') || '';
-  state.fromMap = {
-    name, bid: params.get('bid') || '', pid: params.get('pid') || '', g: params.get('g') || '',
-  };
+  let url = params.get('url');
+  const bid = params.get('bid') || '', pid = params.get('pid') || '';
+  if ((!url && !(bid && pid)) || mapLoading) return;
+  let name = params.get('name') || '';
+  state.fromMap = { name, bid, pid, g: params.get('g') || '' };
+  const animeBefore = state.anime;
+  mapLoading = true;
   try {
-    setStatus(name ? `正在载入巡礼点「${name}」的动画截图…` : '正在载入动画截图…');
-    const data = await urlToImageData(url);
+    const loading = name ? `正在载入巡礼点「${name}」的动画截图…` : '正在载入巡礼点的动画截图…';
+    setMapLoad('📍 ' + loading); setStatus(loading);
+    if (!url) {
+      const found = await lookupAnitabiPoint(bid, pid);
+      url = found.url;
+      if (!name) name = state.fromMap.name = found.name;
+    }
+    let u;
+    try { u = new URL(url); } catch { throw new Error('截图链接无效'); }
+    if (!isAnitabiImage(u)) {
+      console.warn('忽略不受信任的跳转图片来源：', url); // 静默回到空状态，不打断正常上传引导
+      setMapLoad('');
+      return;
+    }
+    let data = null, lastError = null;
+    for (const candidate of anitabiImageCandidates(u)) {
+      try { data = await urlToImageData(candidate, { localCopy: true }); break; } catch (e) { lastError = e; }
+    }
+    if (!data) throw lastError || new Error('图片无法读取');
+    // 载入期间用户已经自己放了截图：尊重用户的选择，不覆盖
+    if (state.anime !== animeBefore) { setMapLoad(''); return; }
     const thumb = $('thumbAnime'); // 与 bindDrop 一致：更新动画区缩略图
     if (thumb) { thumb.src = data.url; thumb.hidden = false; }
     await handleAnimeData(data);
+    setMapLoad(name ? `📍 已载入巡礼点「${name}」的动画截图` : '📍 已载入巡礼点的动画截图', { done: true });
     setStatus(name
-      ? `已载入「${name}」的动画截图 · 现在上传你在当地拍的照片即可开始调色`
-      : '动画截图已载入 · 现在上传你拍的实景照片开始调色');
+      ? `已载入「${name}」的动画截图 · 现在拍摄或上传你在当地拍的照片即可开始调色`
+      : '动画截图已载入 · 现在拍摄或上传你拍的实景照片开始调色');
   } catch (e) {
-    setStatus('动画截图载入失败（' + (e.message || e) + '）· 你仍可手动上传');
+    const reason = e.message || String(e);
+    setMapLoad(`巡礼点截图载入失败：${reason}`, { failed: true });
+    setStatus('动画截图载入失败（' + reason + '）· 可点「重试」，或手动上传');
+  } finally {
+    mapLoading = false;
   }
 }
+$('btnMapRetry').addEventListener('click', loadFromQuery);
 loadFromQuery();
 
 // ---------- 控件 ----------
@@ -885,6 +986,69 @@ $('btnResetCharacter').addEventListener('click', (e) => {
   e.preventDefault(); e.stopPropagation();
   resetCharacterComposite();
 });
+
+// ---------- 滑杆数值：点一下就能直接输入 ----------
+// 手机上滑杆一格只有一两个像素，想要精确的 35% 几乎拖不出来。数值标签做成可点的
+// 小输入框：点开弹数字键盘，回车或点别处生效，再以 input 事件通知原有的滑杆处理器，
+// 这样重算、联动、自动保存全部沿用滑杆自己的逻辑。
+function makeValueEditable(rangeId, valueId) {
+  const range = $(rangeId), value = $(valueId);
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'num-edit';
+  input.min = range.min; input.max = range.max; input.step = range.step || '1';
+  input.setAttribute('aria-label', '输入数值');
+  input.hidden = true;
+  value.after(input);
+  value.classList.add('num-tap');
+  value.setAttribute('role', 'button');
+  value.tabIndex = 0;
+  value.title = '点按输入数值';
+  const open = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (range.disabled) return;
+    input.value = range.value;
+    input.style.cssFloat = getComputedStyle(value).cssFloat;
+    value.hidden = true; input.hidden = false;
+    input.focus(); input.select();
+  };
+  const close = (commit) => {
+    if (input.hidden) return;
+    input.hidden = true; value.hidden = false;
+    const v = Number(input.value);
+    if (!commit || input.value.trim() === '' || !Number.isFinite(v)) return;
+    const clamped = String(Math.min(Number(range.max), Math.max(Number(range.min), Math.round(v))));
+    if (clamped === range.value) return;
+    range.value = clamped;
+    range.dispatchEvent(new Event('input', { bubbles: true }));
+    range.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  value.addEventListener('click', open);
+  value.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') open(e); });
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('blur', () => close(true));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); close(false); }
+  });
+}
+
+[
+  ['strength', 'strengthVal'], ['satBoost', 'satBoostVal'], ['bloom', 'bloomVal'],
+  ['overlayOpacity', 'overlayOpacityVal'], ['charScaleQuick', 'charScaleQuickVal'],
+  ['maskThr', 'maskThrVal'], ['maskErode', 'maskErodeVal'], ['charScale', 'charScaleVal'],
+  ['harmonize', 'harmonizeVal'], ['shadow', 'shadowVal'], ['shadowOffset', 'shadowOffsetVal'],
+  ['grain', 'grainVal'], ['alignZoom', 'alignZoomVal'], ['alignOpacity', 'alignOpacityVal'],
+  ['lassoKeepBrush', 'lassoKeepBrushVal'],
+].forEach(([rangeId, valueId]) => makeValueEditable(rangeId, valueId));
+
+// 抠像进度与提示原本只写在右侧面板的 extractStatus 里：圈选弹窗全屏盖住它，手机上它又常在
+// 屏幕外。这里统一镜像——弹窗开着就显示在弹窗顶部，否则面板不可见时用顶部浮条提示。
+new MutationObserver(() => {
+  const text = $('extractStatus').textContent;
+  if (!$('lassoModal').hidden) $('lassoStatus').textContent = text;
+  else if (text && !inViewport($('extractStatus'))) showToast(text);
+}).observe($('extractStatus'), { childList: true, characterData: true, subtree: true });
 
 // ⓘ 说明气泡：手机没有 hover，点按切换；点别处或再点一次收起
 document.addEventListener('click', (e) => {
@@ -948,7 +1112,7 @@ function applyCharSelection(resetPos) {
 // 即便是桌面浏览器也统一交给一次性 Worker，避免用户在等待时点击任何控件就让标签页假死。
 function runAIInWorker(imageData, opts = {}) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker('./ai-worker.js?v=20260718-stable-rollback', { type: 'module', name: 'seichi-ai-once' });
+    const worker = new Worker('./ai-worker.js?v=20260928-w8', { type: 'module', name: 'seichi-ai-once' });
     worker.onmessage = (event) => {
       const msg = event.data;
       if (msg.type === 'progress') opts.onProgress?.(msg.received, msg.total);
@@ -987,6 +1151,7 @@ $('btnExtractAI').addEventListener('click', async () => {
   };
   const onStage = (s) => report(s);
   try {
+    await ensureModelRoute(report, AUTO_CACHE_URLS);
     const t0 = performance.now();
     // 两级流水线：先检测角色框，再逐框抠图。所有平台都在 Worker 内运行。
     const runAI = () => runAIInWorker(state.anime.imgData, {
@@ -1104,6 +1269,7 @@ async function enterAlignMode() {
   $('alignZoomVal').textContent = $('alignZoom').value + '%';
   alignState.active = true;
   $('compare').classList.add('align-on');
+  showToast(ALIGN_TIP);
   $('alignBar').hidden = false;
   $('compareModes').hidden = true;
   $('btnAlign').textContent = '退出对齐';
@@ -1173,12 +1339,19 @@ $('btnAlign').addEventListener('click', () => { alignState.active ? exitAlignMod
 $('btnAlignApply').addEventListener('click', applyAlignCrop);
 $('btnAlignCancel').addEventListener('click', () => exitAlignMode());
 $('btnAlignReset').addEventListener('click', resetAlignCrop);
-$('alignZoom').addEventListener('input', (e) => {
-  $('alignZoomVal').textContent = e.target.value + '%';
+const ALIGN_TIP = DEVICE.coarse ? '单指拖动照片对准虚影 · 双指捏合缩放' : '拖动照片对准虚影 · 滚轮缩放';
+document.querySelector('#alignBar .align-tip').textContent = ALIGN_TIP;
+
+// 构图缩放的唯一入口（滑杆、双指捏合、滚轮共用）：zoom=100 是整幅，300 是放大三倍
+function setAlignZoom(zoom) {
+  const z = Math.max(100, Math.min(300, zoom));
+  $('alignZoom').value = Math.round(z);
+  $('alignZoomVal').textContent = $('alignZoom').value + '%';
   if (!alignState.active) return;
-  alignState.crop.scale = alignState.maxScale / (parseInt(e.target.value, 10) / 100);
+  alignState.crop.scale = alignState.maxScale / (z / 100);
   drawAlignPreview();
-});
+}
+$('alignZoom').addEventListener('input', (e) => setAlignZoom(parseInt(e.target.value, 10)));
 $('alignOpacity').addEventListener('input', (e) => {
   $('alignOpacityVal').textContent = e.target.value + '%';
   $('alignGhost').style.opacity = String(parseInt(e.target.value, 10) / 100);
@@ -1215,9 +1388,24 @@ $('alignOpacity').addEventListener('input', (e) => {
 
   handle.addEventListener('pointerdown', (e) => { sliderDrag = true; e.stopPropagation(); });
 
-  // 双指捏合缩放角色（手机）：第二根手指落下即接管，抬起一根即结束
+  const charEditable = () => state.cutout && $('composite').checked && !alignState.active && !state.charLock;
+
+  // 预览区默认 touch-action: pan-y，好让手指在预览上也能上下滚页面。但这样竖向拖角色、
+  // 竖向对齐照片时浏览器会抢去滚动页面（pointercancel），手机上几乎拖不动。
+  // 对齐模式整块交给我们（CSS 里 .align-on 为 none）；平时只有落在角色身上、或两指同时
+  // 按下的触摸才拦下默认滚动，其他位置照常滚页面。
+  compare.addEventListener('touchstart', (e) => {
+    if (alignState.active) { e.preventDefault(); return; }
+    if (!charEditable()) return;
+    if (e.touches.length >= 2) { e.preventDefault(); return; }
+    const t = e.touches[0], p = toCanvas(t.clientX, t.clientY);
+    if (p.inDisplay && hitChar(p.x, p.y)) e.preventDefault();
+  }, { passive: false });
+
+  // 双指捏合：有角色时缩放角色；对齐模式下缩放照片。第二根手指落下即接管，抬起一根即结束
   const pointers = new Map();
   const pinch = { active: false, startDist: 0, startScale: 100 };
+  let alignPinch = null; // { startDist, startZoom }
   const pinchDist = () => {
     const [a, b] = [...pointers.values()];
     return Math.hypot(a.x - b.x, a.y - b.y);
@@ -1225,7 +1413,14 @@ $('alignOpacity').addEventListener('input', (e) => {
 
   compare.addEventListener('pointerdown', (e) => {
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (pointers.size === 2 && state.cutout && $('composite').checked && !alignState.active && !state.charLock) {
+    if (pointers.size === 2 && alignState.active) {
+      alignDrag = false;
+      alignPinch = { startDist: pinchDist() || 1, startZoom: parseInt($('alignZoom').value, 10) };
+      compare.classList.remove('grabbing');
+      return;
+    }
+    if (pointers.size > 1 && alignState.active) return;
+    if (pointers.size === 2 && charEditable()) {
       pinch.active = true;
       charDrag = sliderDrag = false;
       pinch.startDist = pinchDist() || 1;
@@ -1252,6 +1447,10 @@ $('alignOpacity').addEventListener('input', (e) => {
 
   window.addEventListener('pointermove', (e) => {
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (alignPinch) {
+      if (pointers.size >= 2) setAlignZoom(alignPinch.startZoom * (pinchDist() / alignPinch.startDist));
+      return;
+    }
     if (pinch.active) {
       if (pointers.size >= 2) setCharScale(pinch.startScale * (pinchDist() / pinch.startDist));
       return;
@@ -1276,15 +1475,20 @@ $('alignOpacity').addEventListener('input', (e) => {
   });
   const releasePointer = (e) => {
     pointers.delete(e.pointerId);
-    if (pointers.size < 2) pinch.active = false;
+    if (pointers.size < 2) { pinch.active = false; alignPinch = null; }
     sliderDrag = false; charDrag = false; alignDrag = false; compare.classList.remove('grabbing');
   };
   window.addEventListener('pointerup', releasePointer);
   window.addEventListener('pointercancel', releasePointer);
 
-  // 桌面：滚轮悬停在角色上直接缩放
+  // 桌面：对齐模式滚轮缩放照片；平时滚轮悬停在角色上直接缩放角色
   compare.addEventListener('wheel', (e) => {
-    if (!state.cutout || !$('composite').checked || alignState.active || state.charLock) return;
+    if (alignState.active) {
+      e.preventDefault();
+      setAlignZoom(parseInt($('alignZoom').value, 10) * (e.deltaY < 0 ? 1.06 : 1 / 1.06));
+      return;
+    }
+    if (!charEditable()) return;
     const p = toCanvas(e.clientX, e.clientY);
     if (!p.inDisplay || !hitChar(p.x, p.y)) return;
     e.preventDefault();
@@ -1301,15 +1505,68 @@ function download(blobOrUrl, name) {
   document.body.appendChild(a); a.click(); a.remove();
 }
 
+// 导出文件名一律带时间戳。安卓 Chrome 遇到同名文件会弹「文件已存在，要再次下载吗？」，
+// 没留意那条提示，换图后的第二次导出就等于静默失败。
+function exportName(kind, ext) {
+  const d = new Date(), p = (n) => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  return `seichi-${kind}-${stamp}.${ext}`;
+}
+
+const fmtSize = (bytes) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`);
+
+function shareableFile(blob, name) {
+  const file = new File([blob], name, { type: blob.type });
+  try { return typeof navigator.share === 'function' && navigator.canShare?.({ files: [file] }) ? file : null; }
+  catch { return null; }
+}
+
+// 所有单文件导出的出口：立即下载，同时在页面底部弹出结果卡片（预览 / 分享 / 再次下载）。
+// 手机上看不到页面底端的状态栏，这张卡片就是“确实导出了”的反馈；分享按钮能直接存进相册。
+let exportDoneUrl = '';
+function deliverExport(blob, name, detail = '') {
+  if (exportDoneUrl) URL.revokeObjectURL(exportDoneUrl);
+  exportDoneUrl = URL.createObjectURL(blob);
+  state.lastExport = { blob, name };
+  download(exportDoneUrl, name);
+  const preview = $('exportDonePreview');
+  preview.hidden = !blob.type.startsWith('image/');
+  if (preview.hidden) preview.removeAttribute('src'); else preview.src = exportDoneUrl;
+  $('exportDoneName').textContent = name;
+  $('exportDoneDetail').textContent = [detail, fmtSize(blob.size)].filter(Boolean).join(' · ');
+  $('btnExportShare').hidden = !shareableFile(blob, name);
+  $('exportDone').hidden = false;
+}
+
+$('btnExportAgain').addEventListener('click', () => {
+  if (state.lastExport && exportDoneUrl) download(exportDoneUrl, state.lastExport.name);
+});
+$('btnExportDoneClose').addEventListener('click', () => {
+  $('exportDone').hidden = true;
+  $('exportDonePreview').removeAttribute('src');
+  // 下载可能仍在读这个 blob URL，稍后再回收
+  const url = exportDoneUrl;
+  exportDoneUrl = ''; state.lastExport = null;
+  if (url) setTimeout(() => URL.revokeObjectURL(url), 30_000);
+});
+$('btnExportShare').addEventListener('click', async () => {
+  const exp = state.lastExport;
+  const file = exp && shareableFile(exp.blob, exp.name);
+  if (!file) { setStatus('此浏览器不支持直接分享文件，请用「再次下载」'); return; }
+  try {
+    await navigator.share({ files: [file], title: '圣地巡礼调色' });
+  } catch (e) {
+    if (e?.name !== 'AbortError') setStatus('分享失败：' + (e.message || e));
+  }
+});
+
 // 画布一律经 blob 导出，不要 toDataURL。iOS Safari 不认 data: URL 上的 download 属性
 // ——a.click() 等同于向 data: 顶层导航，Safari 直接拦掉，于是「其他导出全都没反应」；
 // 何况 base64 还会把几十 MB 的对比图再撑大三分之一。
-async function downloadCanvas(canvas, name, type = 'image/png', quality) {
+async function downloadCanvas(canvas, name, type = 'image/png', quality, detail = '') {
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, type, quality));
   if (!blob) throw new Error('浏览器无法编码此尺寸的图片');
-  const url = URL.createObjectURL(blob);
-  download(url, name);
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  deliverExport(blob, name, detail || `${canvas.width}×${canvas.height}`);
 }
 
 // 分块导出用它让出主线程。只用 requestAnimationFrame 的话，标签页转入后台后
@@ -1447,52 +1704,28 @@ $('btnExportImg').addEventListener('click', async () => {
         }
       }
       if (!blob || !c) throw lastError || new Error('导出失败');
-      state.lastExport = { blob, name: 'seichi-graded.jpg', width: c.width, height: c.height };
-      const shareFile = new File([blob], state.lastExport.name, { type: 'image/jpeg' });
-      const canShareFile = typeof navigator.share === 'function' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [shareFile] });
-      $('btnShareImg').hidden = !canShareFile;
       const sizeText = c.dataset.wasDownscaled === '1'
         ? `原裁剪 ${c.dataset.originalWidth}×${c.dataset.originalHeight}，生成 ${c.width}×${c.height}`
         : `生成 ${c.width}×${c.height} 原始分辨率`;
       // 直接下载。<a download> 不需要瞬时用户激活，全分辨率渲染耗时再久也一定能存下；
       // navigator.share 则会在激活窗口（iOS 约 5 秒）过期后抛 NotAllowedError，故不放在主路径上。
-      // iOS 存入「文件」App；想进相册再点「保存到照片 / 分享」，那次点击自带新手势。
-      const url = URL.createObjectURL(blob);
-      download(url, state.lastExport.name);
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setStatus(canShareFile && DEVICE.isAppleMobile
-        ? `${sizeText} JPEG · 已存入「文件」·「保存到照片 / 分享」可存进相册`
-        : `${sizeText} JPEG`);
+      // 想进相册就点结果卡片上的「分享 / 存到相册」，那次点击自带新手势。
+      deliverExport(blob, exportName('graded', 'jpg'), `${c.width}×${c.height} JPEG`);
+      setStatus(DEVICE.isAppleMobile && !$('btnExportShare').hidden
+        ? `${sizeText} JPEG · 已存入「文件」·「分享 / 存到相册」可存进相册`
+        : `${sizeText} JPEG · 已开始下载`);
     } else {
       // 没有原始文件引用（不应发生）：退回导出预览画布
       const c = document.createElement('canvas');
       c.width = $('canvasGraded').width; c.height = $('canvasGraded').height;
       c.getContext('2d').drawImage($('canvasGraded'), 0, 0);
-      await downloadCanvas(c, 'seichi-graded.png');
+      await downloadCanvas(c, exportName('graded', 'png'));
     }
   } catch (e) {
     console.error(e);
     setStatus('导出失败：' + (e.message || e));
   } finally {
     btn.disabled = false;
-  }
-});
-
-$('btnShareImg').addEventListener('click', async () => {
-  const exp = state.lastExport;
-  if (!exp) { setStatus('请先生成调色图'); return; }
-  const file = new File([exp.blob], exp.name, { type: 'image/jpeg' });
-  try {
-    if (navigator.canShare?.({ files: [file] })) {
-      await navigator.share({ files: [file], title: '圣地巡礼调色图' });
-      setStatus(`已打开系统分享 · ${exp.width}×${exp.height}`);
-    } else {
-      const url = URL.createObjectURL(exp.blob); download(url, exp.name);
-      setTimeout(() => URL.revokeObjectURL(url), 5000);
-      setStatus('浏览器不支持文件分享，已改为下载 JPEG');
-    }
-  } catch (e) {
-    if (e?.name !== 'AbortError') setStatus('分享失败：' + (e.message || e));
   }
 });
 
@@ -1503,9 +1736,7 @@ $('btnExportLut').addEventListener('click', () => {
   setTimeout(() => {
     try {
       const cube = generateCubeLUT(state.transform, 65, 'Seichi Grade');
-      const blob = new Blob([cube], { type: 'text/plain' }), url = URL.createObjectURL(blob);
-      download(url, 'seichi-grade.cube');
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      deliverExport(new Blob([cube], { type: 'text/plain' }), exportName('grade', 'cube'), '65³ LUT');
       setStatus('LUT 已生成 · 65³ · 不含天空分区与辉光');
     } finally { btn.disabled = false; }
   }, 30);
@@ -1582,7 +1813,8 @@ async function exportCompareLayout(layoutOverride = '') {
   const out = makeCompareCanvas(0, layoutOverride);
   const suffix = layoutOverride ? `-${layoutOverride}` : '';
   try {
-    await downloadCanvas(out, `seichi-compare${suffix}.png`);
+    await downloadCanvas(out, exportName(`compare${suffix}`, 'png'));
+    setStatus(`已导出对比图 · ${out.width}×${out.height}`);
   } catch (e) { setStatus('导出对比图失败：' + (e.message || e)); }
 }
 
@@ -1609,7 +1841,7 @@ function makeOverlayCompareCanvas(maxWidth = 0) {
 async function exportOverlayCompare() {
   const out = makeOverlayCompareCanvas();
   try {
-    await downloadCanvas(out, 'seichi-overlay-compare.png');
+    await downloadCanvas(out, exportName('overlay', 'png'));
     setStatus(`已导出叠加对照图 · 动画透明度 ${$('overlayOpacity').value}%`);
   } catch (e) { setStatus('导出叠加对照图失败：' + (e.message || e)); }
 }
@@ -1691,9 +1923,7 @@ $('btnExportCharacter').addEventListener('click', async () => {
   try {
     const blob = await new Promise((resolve) => state.cutout.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('浏览器无法编码透明 PNG');
-    const url = URL.createObjectURL(blob);
-    download(url, 'seichi-character.png');
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    deliverExport(blob, exportName('character', 'png'), `${state.cutout.width}×${state.cutout.height} 透明 PNG`);
     setStatus(`已导出角色透明 PNG · ${state.cutout.width}×${state.cutout.height}`);
   } catch (e) { setStatus('角色 PNG 导出失败：' + (e.message || e)); }
   finally { btn.disabled = false; }
@@ -1770,9 +2000,7 @@ $('btnExportWipe').addEventListener('click', async () => {
     setStatus('正在录制 4 秒滑动对比动图…请保持页面在前台');
     const video = await recordWipeVideo();
     const ext = video.mimeType.includes('mp4') ? 'mp4' : 'webm';
-    const url = URL.createObjectURL(video.blob);
-    download(url, `seichi-wipe-compare.${ext}`);
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    deliverExport(video.blob, exportName('wipe-compare', ext), `${video.width}×${video.height} · 4 秒`);
     setStatus(`已导出 ${ext.toUpperCase()} 动图 · ${video.width}×${video.height} · 4 秒循环`);
   } catch (e) {
     console.error(e);
@@ -1888,9 +2116,7 @@ $('btnExportMorph').addEventListener('click', async () => {
   const btn = $('btnExportMorph'); btn.disabled = true;
   try {
     const gif = await makeAnimeToSceneGif();
-    const url = URL.createObjectURL(gif.blob);
-    download(url, 'seichi-anime-to-scene.gif');
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    deliverExport(gif.blob, exportName('anime-to-scene', 'gif'), `${gif.width}×${gif.height} GIF`);
     setStatus(`已导出 GIF · ${gif.width}×${gif.height} · 约 2 秒 · 动画渐变为实景`);
   } catch (e) {
     console.error(e);
@@ -1992,9 +2218,7 @@ $('btnExportApng').addEventListener('click', async () => {
   const btn = $('btnExportApng'); btn.disabled = true;
   try {
     const apng = await makeAnimeToSceneApng();
-    const url = URL.createObjectURL(apng.blob);
-    download(url, 'seichi-anime-to-scene.apng.png');
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    deliverExport(apng.blob, exportName('anime-to-scene', 'apng.png'), `${apng.width}×${apng.height} APNG`);
     setStatus(`已导出高清 APNG · ${apng.width}×${apng.height} · ${(apng.blob.size / 1048576).toFixed(1)}MB · 全彩，分享兼容性略低于 GIF`);
   } catch (e) {
     console.error(e);
@@ -2032,7 +2256,7 @@ $('batchFiles').addEventListener('change', async (event) => {
         if (!blob) throw new Error('JPEG 编码失败');
         const base = (files[i].name || `photo-${i + 1}`).replace(/\.[^.]+$/, '');
         const url = URL.createObjectURL(blob);
-        download(url, `${base}-seichi.jpg`);
+        download(url, exportName(base, 'jpg'));
         setTimeout(() => URL.revokeObjectURL(url), 8000);
         URL.revokeObjectURL(data.url);
         completed++;
@@ -2133,6 +2357,7 @@ $('matchFiles').addEventListener('change', async (event) => {
   $('matchResults').hidden = true;
   const report = (text) => { setStatus(text); setButtonLoad('loadMatchScene', text); };
   try {
+    await ensureModelRoute(report, MATCH_CACHE_URLS);
     report('准备模型…');
     const fmtMB = (n) => (n / 1048576).toFixed(1);
     const query = await embedImage(queryImage, {
@@ -2305,6 +2530,129 @@ const AUTO_CACHE_URLS = [...AUTO_MODEL_URLS, ...RUNTIME_URLS];
 const MATCH_CACHE_URLS = [...MATCH_MODEL_URLS, ...RUNTIME_URLS]; // 找图也要能离线，故连运行时一起缓存
 let lastDownloadProbe = null;
 
+// ---------- 模型下载线路：多服务器按访客网络分配 ----------
+// 线路列表见 model-mirrors.js。每位访客第一次需要下载模型时，逐条线路实测吞吐（取一段模型
+// 文件、最多几秒），按快慢排序后写进 Cache Storage 交给 sw.js；sw.js 缓存未命中时按这个顺序
+// 去取，失败自动换下一条。国内网络多半阿里云更快，挂了日本代理的多半 CF 更快——各走各的。
+const MODEL_MIRRORS = (self.SEICHI_MODEL_MIRRORS || []).filter((m) => m && m.base);
+const ROUTE_STORE = 'seichi-model-route-v1';
+const ROUTE_CACHE = 'seichi-route';
+const ROUTE_TTL = 12 * 3600 * 1000; // 手机常在 Wi‑Fi / 流量 / 代理之间切换，半天后重新测
+const PROBE_BYTES = 1.5 * 1048576, PROBE_MS = 4000;
+
+function readModelRoute() {
+  try { return JSON.parse(localStorage.getItem(ROUTE_STORE) || 'null') || { mode: 'auto' }; }
+  catch { return { mode: 'auto' }; }
+}
+function saveModelRoute(route) {
+  try { localStorage.setItem(ROUTE_STORE, JSON.stringify(route)); } catch { /* 隐私模式 */ }
+}
+function modelRouteOrder(route) {
+  const ids = MODEL_MIRRORS.map((m) => m.id);
+  const first = (route.mode && route.mode !== 'auto' ? [route.mode] : route.order || []).filter((id) => ids.includes(id));
+  return [...first, ...ids.filter((id) => !first.includes(id))];
+}
+// 页面与 sw.js 通过同一个 Cache Storage 条目传话（SW 可能随时被系统回收，内存变量靠不住）
+async function publishModelRoute(route) {
+  if (!('caches' in window)) return;
+  try {
+    const cache = await caches.open(ROUTE_CACHE);
+    await cache.put(new URL('./__model-route.json', document.baseURI).href,
+      new Response(JSON.stringify({ order: modelRouteOrder(route) }), { headers: { 'Content-Type': 'application/json' } }));
+  } catch { /* 不可用时 SW 按配置顺序 */ }
+}
+
+// 实测一条线路：取人物检测模型的前 1.5MB（或 4 秒内能取到的部分），算首包延迟与吞吐。
+// 带 __probe 参数的请求 sw.js 不拦截，保证测的是真实网络而不是本地缓存。
+async function probeMirror(mirror) {
+  const url = new URL(`${mirror.base}/models/person-detect.onnx`, location.href);
+  url.searchParams.set('__probe', String(Date.now()));
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_MS);
+  const started = performance.now();
+  let firstByte = 0, bytes = 0;
+  const result = { id: mirror.id, name: mirror.name, ok: false };
+  try {
+    const resp = await fetch(url, { cache: 'no-store', credentials: 'omit', signal: controller.signal });
+    firstByte = performance.now() - started;
+    if (!resp.ok) return { ...result, error: `HTTP ${resp.status}` };
+    if (resp.body) {
+      const reader = resp.body.getReader();
+      while (bytes < PROBE_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.length;
+      }
+      reader.cancel().catch(() => {});
+    }
+  } catch (error) {
+    // 超时但已经收到数据：按已收到的部分计速；一个字节都没有才算不可用
+    if (!bytes) return { ...result, error: error?.name === 'AbortError' ? `${PROBE_MS / 1000} 秒内无响应` : (error?.message || String(error)) };
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+  const seconds = Math.max(0.05, (performance.now() - started - firstByte) / 1000);
+  return { ...result, ok: bytes > 0, firstByte: Math.round(firstByte), speed: bytes / seconds, error: bytes ? null : '没有收到数据' };
+}
+
+async function probeModelMirrors() {
+  const results = [];
+  for (const mirror of MODEL_MIRRORS) results.push(await probeMirror(mirror)); // 逐条测，互不抢带宽
+  const ok = results.filter((r) => r.ok).sort((a, b) => b.speed - a.speed);
+  const route = readModelRoute();
+  const next = { ...route, order: ok.map((r) => r.id), results, at: ok.length ? Date.now() : 0 };
+  saveModelRoute(next);
+  await publishModelRoute(next);
+  renderModelRoute();
+  return next;
+}
+
+// 下载模型前调用：所需文件都已缓存就什么都不做；否则在测速结果过期时重新测一次。
+let routeProbe = null;
+async function ensureModelRoute(report, neededUrls = []) {
+  if (MODEL_MIRRORS.length < 2) return;
+  const route = readModelRoute();
+  const fresh = route.mode !== 'auto' || (route.at && Date.now() - route.at < ROUTE_TTL);
+  if (fresh) { await publishModelRoute(route); return; }
+  try {
+    if (neededUrls.length && 'caches' in window) {
+      const cache = await caches.open(MODEL_CACHE);
+      if (await countCached(cache, neededUrls) === neededUrls.length) return;
+    }
+  } catch { /* 读不到缓存就照常测速 */ }
+  if (!routeProbe) {
+    report?.('测速选择模型下载线路…');
+    routeProbe = probeModelMirrors().finally(() => { routeProbe = null; });
+  }
+  const next = await routeProbe;
+  const first = MODEL_MIRRORS.find((m) => m.id === modelRouteOrder(next)[0]);
+  if (first && next.at) report?.(`已选择「${first.name}」线路下载模型`);
+}
+
+function renderModelRoute() {
+  $('modelRouteRow').hidden = $('modelRouteInfo').hidden = MODEL_MIRRORS.length < 2;
+  if (MODEL_MIRRORS.length < 2) return;
+  const route = readModelRoute(), select = $('modelRoute');
+  if (select.options.length === 1) for (const m of MODEL_MIRRORS) select.add(new Option(`固定走：${m.name}`, m.id));
+  select.value = route.mode !== 'auto' && MODEL_MIRRORS.some((m) => m.id === route.mode) ? route.mode : 'auto';
+  const first = MODEL_MIRRORS.find((m) => m.id === modelRouteOrder(route)[0]);
+  const measured = (route.results || [])
+    .map((r) => (r.ok ? `${r.name} ${fmtSpeed(r.speed)}（首包 ${r.firstByte}ms）` : `${r.name} 不可用`)).join(' · ');
+  $('modelRouteInfo').textContent = select.value !== 'auto'
+    ? `已固定走「${first?.name}」；这条线路失败时仍会自动换另一条`
+    : route.at
+      ? `当前走「${first?.name}」 · 上次测速：${measured}`
+      : '下载模型前会自动测速，选当前网络下更快的一条';
+}
+
+$('modelRoute').addEventListener('change', async (e) => {
+  const route = { ...readModelRoute(), mode: e.target.value };
+  saveModelRoute(route);
+  await publishModelRoute(route);
+  renderModelRoute();
+});
+
 const cacheKey = (url) => new URL(url, location.href).href;
 async function cacheHas(cache, url) {
   return !!(await cache.match(cacheKey(url), { ignoreVary: true }));
@@ -2350,6 +2698,7 @@ async function downloadOfflinePackage(kind, urls, button) {
   const label = $('modelCacheStatus'); button.disabled = true;
   try {
     await navigator.serviceWorker.ready;
+    await ensureModelRoute((text) => { label.textContent = text; }, urls);
     if (navigator.storage?.persist) await navigator.storage.persist().catch(() => false);
     const cache = await caches.open(MODEL_CACHE);
     let done = await countCached(cache, urls);
@@ -2460,12 +2809,14 @@ $('btnCacheMatch').addEventListener('click', () => downloadOfflinePackage('找�
   });
 })();
 
-// 只发 HEAD 请求，不下载数十 MB 的模型本体。用于定位“模型下载失败”是卡在
-// GitHub Pages、分块模型、还是 jsDelivr 的 ONNX 运行环境。
+// 各模型线路另做实测吞吐（probeModelMirrors）；这里只发 HEAD，不下载数十 MB 的本体，
+// 用于定位“模型下载失败”是卡在分块模型、还是 ONNX 运行环境（jsDelivr / 自建线路）。
 const MODEL_DOWNLOAD_PROBES = [
-  ['本站 · 人物检测模型', `${MODEL_BASE}/models/person-detect.onnx`],
   ['本站 · 抠图模型分块', `${MODEL_BASE}/models/isnet-anime-w8.onnx.part00`],
   ['jsDelivr · ONNX 运行环境', `${ORT_BASE}ort-wasm-simd-threaded.wasm`],
+  ...MODEL_MIRRORS.filter((m) => m.ort && m.base !== '.').map((m) => [
+    `${m.name} · ONNX 运行环境`, `${m.base}/ort/${ORT_BASE.match(/@([^/]+)\//)[1]}/ort-wasm-simd-threaded.jsep.mjs`,
+  ]),
 ];
 
 async function probeModelDownloadRoute(name, url) {
@@ -2475,13 +2826,16 @@ async function probeModelDownloadRoute(name, url) {
   target.searchParams.set('__probe', String(Date.now()));
   const started = performance.now();
   try {
-    const response = await fetch(target, { method: 'HEAD', cache: 'no-store', signal: controller.signal });
+    const response = await fetch(target, { method: 'HEAD', cache: 'no-store', credentials: 'omit', signal: controller.signal });
     const elapsedMs = Math.round(performance.now() - started);
     const size = Number(response.headers.get('content-length'));
+    // .mjs 必须以 JavaScript 类型下发，否则浏览器拒绝当模块加载（自建服务器常见漏配）
+    const type = response.headers.get('content-type') || '';
+    const badType = /\.mjs$/.test(target.pathname) && response.ok && !/javascript/i.test(type);
     return {
-      name, url: target.origin + target.pathname, ok: response.ok, status: response.status, elapsedMs,
+      name, url: target.origin + target.pathname, ok: response.ok && !badType, status: response.status, elapsedMs,
       size: Number.isFinite(size) && size > 0 ? size : null,
-      error: response.ok ? null : `HTTP ${response.status}`,
+      error: badType ? `Content-Type 是 ${type || '空'}，应为 text/javascript` : response.ok ? null : `HTTP ${response.status}`,
     };
   } catch (error) {
     return {
@@ -2495,7 +2849,7 @@ async function probeModelDownloadRoute(name, url) {
 }
 
 function formatProbeSize(bytes) {
-  return bytes ? `${Math.round(bytes / 1024 / 1024)}MB` : '大小未提供';
+  return bytes ? fmtSize(bytes) : '大小未提供';
 }
 
 $('btnTestModelDownload').addEventListener('click', async () => {
@@ -2503,7 +2857,11 @@ $('btnTestModelDownload').addEventListener('click', async () => {
   const output = $('modelDownloadProbe');
   button.disabled = true;
   output.hidden = false; output.className = 'download-probe';
-  output.textContent = '正在检查下载线路…（只测试连接，不下载完整模型）';
+  output.textContent = `正在测速：${MODEL_MIRRORS.map((m) => m.name).join('、')}…（每条线路只取约 1.5MB，不下载完整模型）`;
+  const mirrorRoute = await probeModelMirrors();
+  const speedLines = mirrorRoute.results.map((r) => (r.ok
+    ? `✓ ${r.name} · 模型下载 ${fmtSpeed(r.speed)} · 首包 ${r.firstByte}ms`
+    : `✕ ${r.name} · ${r.error}`));
   const routes = [];
   for (const [name, url] of MODEL_DOWNLOAD_PROBES) {
     output.textContent = `正在检查：${name}…`;
@@ -2511,11 +2869,14 @@ $('btnTestModelDownload').addEventListener('click', async () => {
   }
   let storage = null;
   try { storage = await navigator.storage?.estimate?.() || null; } catch { /* 浏览器不提供时省略 */ }
-  lastDownloadProbe = { generatedAt: new Date().toISOString(), online: navigator.onLine, routes, storage };
-  const allOk = routes.every((route) => route.ok);
+  lastDownloadProbe = { generatedAt: new Date().toISOString(), online: navigator.onLine, mirrors: mirrorRoute.results, routes, storage };
+  const allOk = routes.every((r) => r.ok) && mirrorRoute.results.every((r) => r.ok);
+  const best = MODEL_MIRRORS.find((m) => m.id === modelRouteOrder(mirrorRoute)[0]);
   output.classList.add(allOk ? 'ok' : 'problem');
   output.textContent = [
     allOk ? '下载线路正常：' : '发现可能影响下载的问题：',
+    ...speedLines,
+    ...(MODEL_MIRRORS.length > 1 && best ? [`→ ${mirrorRoute.mode === 'auto' ? '自动选择' : '已固定'}：${best.name}`] : []),
     ...routes.map((route) => route.ok
       ? `✓ ${route.name} · HTTP ${route.status} · ${route.elapsedMs}ms · ${formatProbeSize(route.size)}`
       : `✕ ${route.name} · ${route.error || '连接失败'} · ${route.elapsedMs}ms`),
@@ -2551,12 +2912,13 @@ $('btnExportDiagnostics').addEventListener('click', async () => {
     },
     storage: null,
     modelDownloadProbe: lastDownloadProbe,
+    modelRoute: readModelRoute(),
     recentErrors,
   };
   try { info.storage = await navigator.storage?.estimate?.() || null; } catch { /* 不支持时省略 */ }
   const blob = new Blob([JSON.stringify(info, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-  download(url, 'seichi-diagnostics.json');
+  download(url, exportName('diagnostics', 'json'));
   setTimeout(() => URL.revokeObjectURL(url), 5000);
   setStatus('已导出诊断信息；将该 JSON 与问题截图一起发来即可');
 });
@@ -2565,6 +2927,11 @@ $('deviceStatus').textContent = IS_MOBILE
   ? `${DEVICE.isIPhone ? 'iPhone' : DEVICE.isIPad ? 'iPad' : '移动端'}保护：预览最长边 ${MAX_DIM}px，导出上限约 ${Math.round(EXPORT_MAX_PIXELS / 1e6)}MP`
   : `桌面预览最长边 ${MAX_DIM}px；导出按原始分辨率分块处理`;
 $('mobileSamRow').hidden = !DEVICE.isAppleMobile;
+renderModelRoute();
+if (MODEL_MIRRORS.length > 1) {
+  $('noticeModelRoute').textContent = `模型下载前会自动测速，在${MODEL_MIRRORS.map((m) => m.name).join('与')}之间选当前网络更快的一条，一条失败自动换另一条。仅使用基础调色功能时无需下载模型。`;
+  $('modelCacheHint').textContent = '基础调色不需要下载 AI 模型。模型会按测速结果自动选择下载线路；出门前可在 Wi‑Fi 下先下载自动抠图离线包。';
+}
 
 setStatus('请上传动画截图与实景照片');
 updateWorkflow();
@@ -2602,7 +2969,8 @@ const lassoState = {
   pts: [], drawing: false, busy: false, mode: 'extract', shape: 'rect',
   keepMode: false, keepDrawing: false, keepStrokes: [], eraseDrawing: false, eraseStroke: null, stage: 'select', maskOverlay: null,
   pickMode: false,   // 第二步「点选补块」：点一下暗蒙版，把整块连通色域并入目标
-  refineBox: null,   // 第一步圈选的 bbox，点选补块只在框内生效
+  addMode: false,    // 第二步「再圈一处」：再圈一个范围，识别结果并入当前目标
+  refineBox: null,   // 已圈选范围的并集 bbox，点选补块只在框内生效
   fillMode: false, fillDrawing: false, fillPts: [], // 「磁性描边」：随手描一段，吸附到线稿
   snapContour: null,                                // 已吸附待确认的闭合轮廓（确认后才锁定内部）
   edgeCost: null, edgeG: null, edgeCostFor: null,   // 边缘代价图缓存（按 state.anime 复用）
@@ -2623,6 +2991,10 @@ function updateLassoTip() {
         : '亮着的是已识别目标；调好橡皮大小后，按住拖过亮起部分即可擦除；或用「点擦整块 / 描边擦除」';
     return;
   }
+  if (lassoState.stage === 'refine' && lassoState.addMode) {
+    $('lassoTip').textContent = `再圈一处：${lassoState.shape === 'free' ? '随手圈出' : '拖框框住'}另一个角色或漏掉的部分，松手自动识别并合并`;
+    return;
+  }
   if (lassoState.stage === 'refine') {
     $('lassoTip').textContent = lassoState.keepMode
       ? '补画：刷过的部分会立刻取消暗蒙版，并入识别目标'
@@ -2630,7 +3002,7 @@ function updateLassoTip() {
         ? '点选补块：点一下暗块里的脸颊/手臂等大片色块，整块（含包住的眼睛嘴巴）会一起补入目标'
         : lassoState.fillMode
           ? '磁性描边：把它当画笔用——像涂鸦一样，手指沿要补回部件的轮廓涂一圈（不必准、不必封口）；松手自动吸附到线稿，确认后圈内不论颜色一律并入目标'
-          : '识别结果以外的区域已蒙版；漏掉的脸、手可用「点选补块 / 磁性描边」补回，细碎处用画笔刷开蒙版';
+          : '识别结果以外的区域已蒙版；漏掉的脸、手可用「点选补块 / 磁性描边」补回，细碎处用画笔刷开蒙版。未选工具时单指可拖动画面';
     return;
   }
   if (lassoState.keepMode) {
@@ -2641,8 +3013,8 @@ function updateLassoTip() {
     ? '要从抠图中擦掉的区域'
     : lassoState.mode === 'algorithm' ? '要由算法抠取的角色' : '要由模型抠取的角色';
   $('lassoTip').textContent = lassoState.shape === 'free'
-    ? `随手圈出${verb}——不必精确贴边`
-    : `按住拖出一个框住${verb}的${lassoState.shape === 'rect' ? '矩形' : '圆'}——不必精确贴边`;
+    ? `随手圈出${verb}——不必精确贴边，松手自动识别`
+    : `按住拖出一个框住${verb}的${lassoState.shape === 'rect' ? '矩形' : '圆'}——不必精确贴边，松手自动识别`;
 }
 
 function updateLassoGuide() {
@@ -2671,7 +3043,7 @@ function lassoRedraw() {
   ctx.putImageData(state.anime.imgData, 0, 0);
   // 第二步补画和橡皮擦都使用同一张遮罩：已选目标亮起，其余区域变暗。
   if ((lassoState.stage === 'refine' || lassoState.mode === 'erase') && lassoState.maskOverlay) ctx.drawImage(lassoState.maskOverlay, 0, 0);
-  if (lassoState.stage === 'select' && lassoState.pts.length > 1) {
+  if ((lassoState.stage === 'select' || lassoState.addMode) && lassoState.pts.length > 1) {
     ctx.save();
     ctx.lineWidth = Math.max(2, c.width / 350);
     ctx.strokeStyle = 'rgba(0, 126, 167,.95)';
@@ -2741,6 +3113,15 @@ function lassoRedraw() {
     if (stroke.pts.length === 1) { ctx.beginPath(); ctx.arc(stroke.pts[0][0], stroke.pts[0][1], stroke.width / 2, 0, Math.PI * 2); ctx.fill(); }
     ctx.restore();
   }
+  if (lassoState.brushPreview) {
+    // 调画笔粗细时在可视区域中央画一个等大的圆，直观看到落笔有多粗
+    const { x, y, r } = lassoState.brushPreview;
+    ctx.save();
+    ctx.lineWidth = Math.max(1.5, r / 14);
+    ctx.strokeStyle = 'rgba(0, 126, 167, .95)'; ctx.fillStyle = 'rgba(0, 167, 225, .18)';
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function updateKeepBrushUI() {
@@ -2748,6 +3129,10 @@ function updateKeepBrushUI() {
   const erasing = lassoState.mode === 'erase';
   const canUndoHere = available || erasing;
   $('btnLassoKeep').hidden = !available;
+  $('btnLassoAdd').hidden = !available;
+  $('btnLassoAdd').classList.toggle('keep-on', lassoState.addMode);
+  $('btnLassoAdd').setAttribute('aria-pressed', String(lassoState.addMode));
+  $('btnLassoReselect').hidden = !available;
   // 点选、磁性描边两个按钮在「补块 refine」和「擦除」两种场景都出现，只是语义相反。
   $('btnLassoPick').hidden = !available && !erasing;
   $('btnLassoPick').textContent = erasing ? '👆 点擦整块' : '👆 点选补块';
@@ -2768,9 +3153,10 @@ function updateKeepBrushUI() {
   $('btnLassoPick').setAttribute('aria-pressed', String(lassoState.pickMode));
   $('btnLassoFill').classList.toggle('keep-on', lassoState.fillMode);
   $('btnLassoFill').setAttribute('aria-pressed', String(lassoState.fillMode));
-  $('lassoShapes').hidden = lassoState.stage === 'refine' || erasing;
+  $('lassoShapes').hidden = erasing || (lassoState.stage === 'refine' && !lassoState.addMode);
   $('btnLassoRun').hidden = erasing;
   $('btnLassoClear').hidden = lassoState.stage === 'refine' || erasing;
+  $('lassoKeepBrushVal').textContent = $('lassoKeepBrush').value;
 }
 
 function lassoBBox() {
@@ -2792,19 +3178,26 @@ function openLasso(mode = 'extract') {
   lassoState.pts = []; lassoState.drawing = false; lassoState.keepMode = false; lassoState.keepDrawing = false; lassoState.keepStrokes = [];
   lassoState.eraseDrawing = false; lassoState.eraseStroke = null;
   lassoState.stage = 'select'; lassoState.maskOverlay = null;
-  lassoState.pickMode = false; lassoState.refineBox = null;
+  lassoState.pickMode = false; lassoState.addMode = false; lassoState.refineBox = null;
   lassoState.fillMode = false; lassoState.fillDrawing = false; lassoState.fillPts = []; lassoState.snapContour = null;
   lassoState.mode = mode;
+  $('lassoStatus').textContent = '';
   // 橡皮擦不是重新“选目标”：打开即展示当前目标，未选部分保持暗蒙版。
   if (mode === 'erase') rebuildLassoMaskOverlay();
   updateLassoTip();
   updateLassoGuide();
   updateKeepBrushUI();
-  $('btnLassoRun').textContent = mode === 'algorithm' ? '算法抠取圈选区域' : '模型抠取圈选区域';
+  $('btnLassoRun').textContent = mode === 'algorithm' ? '算法识别圈选区域' : '模型识别圈选区域';
   $('btnLassoClear').textContent = '重画';
   $('btnLassoRun').disabled = true;
   lassoRedraw();
   $('lassoModal').hidden = false;
+  resetLassoView();
+  // 触屏上提示一次双指缩放；第一次捏合或几秒后自动收起
+  const hint = $('lassoZoomHint');
+  hint.hidden = !DEVICE.coarse;
+  clearTimeout(hint._timer);
+  hint._timer = setTimeout(() => { hint.hidden = true; }, 4500);
 }
 
 // 将一笔橡皮刷出的轨迹裁成“当前已经属于目标”的像素集合。这样橡皮擦只会让
@@ -2920,7 +3313,41 @@ function magneticSnap(rawPts) {
   return sm.length >= 3 ? sm : null;
 }
 
-function closeLasso() { $('lassoModal').hidden = true; }
+function closeLasso() { $('lassoModal').hidden = true; lassoState.addMode = false; }
+
+// ---------- 圈选画布视图：双指缩放 / 平移 ----------
+// 手机上画布只有一掌宽，想圈准远景小人、刷准发丝就得放大。视图只是 CSS 变换，
+// 坐标换算走 getBoundingClientRect，天然包含缩放平移，作画逻辑不用改。
+const lassoView = { scale: 1, x: 0, y: 0 };
+const LASSO_MAX_ZOOM = 8;
+
+function applyLassoView() {
+  $('lassoCanvas').style.transform = `translate(${lassoView.x}px, ${lassoView.y}px) scale(${lassoView.scale})`;
+  $('btnLassoFit').hidden = lassoView.scale <= 1.001;
+}
+
+function resetLassoView() { lassoView.scale = 1; lassoView.x = 0; lassoView.y = 0; applyLassoView(); }
+
+// 以屏幕点 (fx,fy) 为不动点，从视图 from 缩放到 scale，再整体平移 (dx,dy)。
+function setLassoView(scale, fx, fy, from = { ...lassoView }, dx = 0, dy = 0) {
+  const c = $('lassoCanvas'), rect = c.getBoundingClientRect();
+  // transform-origin 是左上角，所以未变换时的布局位置 = 当前外接框左上角 − 当前平移
+  const lx = rect.left - lassoView.x, ly = rect.top - lassoView.y;
+  const s = Math.max(1, Math.min(LASSO_MAX_ZOOM, scale));
+  let x = fx + dx - lx - s * (fx - lx - from.x) / from.scale;
+  let y = fy + dy - ly - s * (fy - ly - from.y) / from.scale;
+  if (s <= 1.001) { x = 0; y = 0; }
+  else {
+    // 放大后要么铺满舞台、要么整张留在舞台内，不许拖到看不见
+    const st = $('lassoStage').getBoundingClientRect();
+    const w = c.offsetWidth * s, h = c.offsetHeight * s;
+    const clamp = (v, a, b) => Math.min(Math.max(v, Math.min(a, b)), Math.max(a, b));
+    x = clamp(x, st.left - lx, st.right - lx - w);
+    y = clamp(y, st.top - ly, st.bottom - ly - h);
+  }
+  lassoView.scale = s; lassoView.x = x; lassoView.y = y;
+  applyLassoView();
+}
 
 function extractAlgorithmInRegion(box) {
   const crop = document.createElement('canvas');
@@ -3059,6 +3486,7 @@ async function runLassoBox(box, centroid) {
       await nextPaint(); // 先显示状态文字，再开始轻量同步处理。
       found = [extractAlgorithmInRegion(box)];
     } else {
+      await ensureModelRoute(report, AUTO_CACHE_URLS);
       const result = await runAIInWorker(state.anime.imgData, {
         job: 'region', box, samPoints: centroid ? [centroid] : [], onStage, onProgress,
         samFallback: true, mobileModel: DEVICE.isAppleMobile,
@@ -3077,15 +3505,25 @@ async function runLassoBox(box, centroid) {
     const ok = found.filter((c) => !c.empty).length;
     const method = lassoState.mode === 'algorithm' ? '算法' : '模型';
     if (ok === 0) {
-      // 没识别出任何内容：留在第一步，让用户按提示直接重圈（不收起粉色工具）
+      // 没识别出任何内容：留在当前步骤，让用户按提示直接重圈
       $('extractStatus').textContent = '圈选区域没有找到明显前景——试着圈大一点、或让圈更贴近角色';
       lassoRedraw();
       return found;
     }
-    $('extractStatus').textContent = `${method}已识别 ${ok} 个角色 · 漏掉的部分可点选补块或用画笔刷开蒙版`;
+    const adding = lassoState.stage === 'refine';
+    $('extractStatus').textContent = adding
+      ? `已并入新圈选区域的 ${ok} 个目标 · 可继续补块、再圈一处或完成`
+      : `${method}已识别 ${ok} 个角色 · 漏掉的部分可点选补块或用画笔刷开蒙版`;
     lassoState.stage = 'refine';
-    lassoState.keepMode = false; lassoState.pickMode = false;
-    lassoState.refineBox = { ...box };
+    lassoState.keepMode = false; lassoState.pickMode = false; lassoState.addMode = false;
+    lassoState.pts = [];
+    const prev = lassoState.refineBox;
+    lassoState.refineBox = prev
+      ? (() => {
+          const x = Math.min(prev.x, box.x), y = Math.min(prev.y, box.y);
+          return { x, y, w: Math.max(prev.x + prev.w, box.x + box.w) - x, h: Math.max(prev.y + prev.h, box.y + box.h) - y };
+        })()
+      : { ...box };
     rebuildLassoMaskOverlay();
     updateLassoGuide(); updateLassoTip(); updateKeepBrushUI();
     $('btnLassoRun').textContent = '完成抠像';
@@ -3101,7 +3539,17 @@ async function runLassoBox(box, centroid) {
     setAIBusy(false);
     setButtonLoad('loadLasso');
     if (lassoState.stage !== 'refine') $('btnLassoRun').disabled = !lassoReady();
+    if (lassoState.mode !== 'algorithm') updateModelCacheStatus();
   }
+}
+
+// 用当前圈出的形状去识别（松手自动触发，也可点按钮重试）
+async function runLassoSelection() {
+  const box = lassoBBox();
+  if (box.w < 12 || box.h < 12) { $('extractStatus').textContent = '圈得太小了，重新圈一下'; return; }
+  let sx = 0, sy = 0;
+  for (const [x, y] of lassoState.pts) { sx += x; sy += y; }
+  await runLassoBox(box, [sx / lassoState.pts.length, sy / lassoState.pts.length]);
 }
 
 $('btnLasso').addEventListener('click', () => {
@@ -3115,21 +3563,21 @@ $('btnLassoClear').addEventListener('click', () => { lassoState.pts = []; lassoS
 $('btnLassoKeep').addEventListener('click', () => {
   if (lassoState.mode === 'erase' || lassoState.stage !== 'refine') return;
   lassoState.keepMode = !lassoState.keepMode;
-  lassoState.pickMode = false; lassoState.fillMode = false; lassoState.fillPts = []; lassoState.snapContour = null;
+  lassoState.pickMode = false; lassoState.addMode = false; lassoState.fillMode = false; lassoState.fillPts = []; lassoState.snapContour = null;
   updateLassoTip(); updateKeepBrushUI(); lassoRedraw();
 });
 $('btnLassoPick').addEventListener('click', () => {
   // 擦除模式下也可切到「点擦整块」；补块模式下只在 refine 阶段可用。
   if (lassoState.mode !== 'erase' && lassoState.stage !== 'refine') return;
   lassoState.pickMode = !lassoState.pickMode;
-  lassoState.keepMode = false; lassoState.fillMode = false; lassoState.fillPts = []; lassoState.snapContour = null;
+  lassoState.keepMode = false; lassoState.addMode = false; lassoState.fillMode = false; lassoState.fillPts = []; lassoState.snapContour = null;
   updateLassoTip(); updateKeepBrushUI(); lassoRedraw();
 });
 $('btnLassoFill').addEventListener('click', () => {
   // 磁性描边：擦除模式随时可用；补块模式只在 refine 阶段可用。
   if (lassoState.mode !== 'erase' && lassoState.stage !== 'refine') return;
   lassoState.fillMode = !lassoState.fillMode;
-  lassoState.keepMode = false; lassoState.pickMode = false;
+  lassoState.keepMode = false; lassoState.pickMode = false; lassoState.addMode = false;
   if (!lassoState.fillMode) { lassoState.fillPts = []; lassoState.snapContour = null; }
   updateLassoTip(); updateKeepBrushUI(); lassoRedraw();
 });
@@ -3154,6 +3602,23 @@ $('btnLassoFillConfirm').addEventListener('click', () => {
   }
   updateKeepBrushUI(); lassoRedraw();
 });
+$('btnLassoAdd').addEventListener('click', () => {
+  if (lassoState.mode === 'erase' || lassoState.stage !== 'refine' || lassoState.busy) return;
+  lassoState.addMode = !lassoState.addMode;
+  lassoState.keepMode = false; lassoState.pickMode = false; lassoState.fillMode = false;
+  lassoState.fillPts = []; lassoState.snapContour = null; lassoState.pts = [];
+  updateLassoTip(); updateKeepBrushUI(); lassoRedraw();
+});
+// 重新圈选：清掉本次识别结果回到第一步，画面缩放位置保持不动
+$('btnLassoReselect').addEventListener('click', () => {
+  if (lassoState.busy) return;
+  const mode = lassoState.mode, view = { ...lassoView };
+  prepareIndependentCutout();
+  openLasso(mode);
+  Object.assign(lassoView, view); applyLassoView();
+  $('lassoZoomHint').hidden = true;
+  $('extractStatus').textContent = '已清除本次圈选结果 · 请重新圈出角色';
+});
 $('btnLassoUndo').addEventListener('click', undoMaskOp);
 $('btnMaskUndo').addEventListener('click', undoMaskOp);
 // 圈选弹窗内也支持常见的 Ctrl/Cmd + Z；只接管遮罩编辑，避免影响页面其它输入框。
@@ -3163,28 +3628,46 @@ document.addEventListener('keydown', (e) => {
     undoMaskOp();
   }
 });
-$('lassoKeepBrush').addEventListener('input', () => lassoRedraw());
+let brushPreviewTimer = 0;
+$('lassoKeepBrush').addEventListener('input', () => {
+  $('lassoKeepBrushVal').textContent = $('lassoKeepBrush').value;
+  // 在当前可见区域中央预览笔触大小（画笔粗细按屏幕像素计，换算回原图像素）
+  const c = $('lassoCanvas'), r = c.getBoundingClientRect(), st = $('lassoStage').getBoundingClientRect();
+  const k = c.width / Math.max(1, r.width);
+  lassoState.brushPreview = {
+    x: ((st.left + st.right) / 2 - r.left) * k,
+    y: ((st.top + st.bottom) / 2 - r.top) * k,
+    r: Number($('lassoKeepBrush').value) * k / 2,
+  };
+  lassoRedraw();
+  clearTimeout(brushPreviewTimer);
+  brushPreviewTimer = setTimeout(() => { lassoState.brushPreview = null; lassoRedraw(); }, 900);
+});
 $('btnLassoRun').addEventListener('click', async () => {
   if (lassoState.stage === 'refine') {
     closeLasso();
     $('extractStatus').textContent = '已完成圈选抠像 · 可继续调阈值、收边或拖拽角色';
     return;
   }
-  const box = lassoBBox();
-  if (box.w < 12 || box.h < 12) { $('extractStatus').textContent = '圈得太小了，重新圈一下'; return; }
-  let sx = 0, sy = 0;
-  for (const [x, y] of lassoState.pts) { sx += x; sy += y; }
-  const centroid = [sx / lassoState.pts.length, sy / lassoState.pts.length];
-  await runLassoBox(box, centroid);
+  await runLassoSelection();
 });
 
 (function setupLassoDraw() {
-  const c = $('lassoCanvas');
-  let anchor = null; // rect/ellipse 的起始角
+  const c = $('lassoCanvas'), stage = $('lassoStage');
+  let anchor = null;      // rect/ellipse 的起始角
+  let ptsBefore = null;   // 本笔开始前的选区：双指接管时还原
+  let tap = null;         // 点选类工具抬手才生效，避免“想捏合放大却先点中一块”
+  let pan = null;         // 第二步未选工具时，单指拖动画面
+  const pointers = new Map();
+  let pinch = null;       // { d0, m0, from }
+  let waitAllUp = false;  // 双指结束后剩下的那根手指不作画，直到全部抬起
+
   const toImg = (e) => {
     const r = c.getBoundingClientRect();
     return [(e.clientX - r.left) / r.width * c.width, (e.clientY - r.top) / r.height * c.height];
   };
+  // 画笔粗细按屏幕像素计：放大后同样的笔触落在原图上更细，正好用来修发丝。
+  const brushWidth = () => Number($('lassoKeepBrush').value) * c.width / Math.max(1, c.getBoundingClientRect().width);
   const rectPoly = (a, b) => [[a[0], a[1]], [b[0], a[1]], [b[0], b[1]], [a[0], b[1]]];
   const ellipsePoly = (a, b, n = 48) => {
     const cx = (a[0] + b[0]) / 2, cy = (a[1] + b[1]) / 2;
@@ -3194,13 +3677,15 @@ $('btnLassoRun').addEventListener('click', async () => {
       return [cx + rx * Math.cos(t), cy + ry * Math.sin(t)];
     });
   };
-  c.addEventListener('pointerdown', (e) => {
-    e.preventDefault();
-    try { c.setPointerCapture(e.pointerId); } catch { /* 某些环境/合成事件会抛，不影响绘制 */ }
+  const selecting = () => lassoState.mode !== 'erase' && (lassoState.stage === 'select' || lassoState.addMode);
+
+  function toolDown(e) {
+    tap = null; pan = null;
+    if (lassoState.busy) return; // 识别进行中只允许缩放查看
     anchor = toImg(e);
     if (lassoState.mode === 'erase') {
-      // 点擦：单击一下就整块擦除（与点选补块对称），不进入拖笔状态。
-      if (lassoState.pickMode) { runEraseAt(anchor); return; }
+      // 点擦：抬手时整块擦除（与点选补块对称），不进入拖笔状态。
+      if (lassoState.pickMode) { tap = { x: e.clientX, y: e.clientY, pt: anchor }; return; }
       // 描边擦除：按住沿线稿描一段，松手吸附到真实轮廓、确认后擦掉内部。
       if (lassoState.fillMode) {
         lassoState.snapContour = null; updateKeepBrushUI();
@@ -3210,31 +3695,35 @@ $('btnLassoRun').addEventListener('click', async () => {
       // 橡皮笔刷：按住即开始一笔，拖过亮起部分即可擦除。
       lassoState.drawing = true;
       lassoState.eraseDrawing = true;
-      lassoState.eraseStroke = { pts: [anchor], width: Number($('lassoKeepBrush').value) };
+      lassoState.eraseStroke = { pts: [anchor], width: brushWidth() };
       lassoRedraw();
       return;
     }
-    if (lassoState.stage === 'refine') {
-      // 第二步：点选补块单击即生效；补画开始记一笔；两者都没开就忽略，
+    if (lassoState.stage === 'refine' && !lassoState.addMode) {
+      // 第二步：点选补块抬手生效；补画开始记一笔；都没开就单指拖动画面。
       // 绝不能改写第一步的选区 pts（否则「完成抠像」会被误禁用）
-      if (lassoState.pickMode) { runPickAt(anchor); return; }
+      if (lassoState.pickMode) { tap = { x: e.clientX, y: e.clientY, pt: anchor }; return; }
       // 磁性描边：按住沿线稿描一段，松手吸附到真实轮廓、确认后并入目标。
       if (lassoState.fillMode) {
         lassoState.snapContour = null; updateKeepBrushUI();
         lassoState.drawing = true; lassoState.fillDrawing = true;
         lassoState.fillPts = [anchor]; lassoRedraw(); return;
       }
-      if (!lassoState.keepMode) return;
+      if (!lassoState.keepMode) {
+        if (lassoView.scale > 1.001) pan = { x: e.clientX, y: e.clientY, from: { ...lassoView } };
+        return;
+      }
       lassoState.drawing = true;
       lassoState.keepDrawing = true;
-      lassoState.keepStrokes.push({ pts: [anchor], width: Number($('lassoKeepBrush').value) });
+      lassoState.keepStrokes.push({ pts: [anchor], width: brushWidth() });
     } else {
+      ptsBefore = lassoState.pts;
       lassoState.drawing = true;
       lassoState.keepDrawing = false;
       lassoState.pts = lassoState.shape === 'free' ? [anchor] : [];
     }
     lassoRedraw();
-  });
+  }
 
   function runPickAt(pt) {
     const res = growRegionAt(pt[0], pt[1], { erase: false });
@@ -3259,7 +3748,11 @@ $('btnLassoRun').addEventListener('click', async () => {
     $('extractStatus').textContent = `已整块擦除 ${res.idx.length.toLocaleString()} 个目标像素 · 当前角色占画面 ${((coverage || 0) * 100).toFixed(0)}% · 可撤销`;
     lassoRedraw();
   }
-  c.addEventListener('pointermove', (e) => {
+  function toolMove(e) {
+    if (pan) {
+      setLassoView(pan.from.scale, e.clientX, e.clientY, pan.from, e.clientX - pan.x, e.clientY - pan.y);
+      return;
+    }
     if (!lassoState.drawing) return;
     const p = toImg(e);
     if (lassoState.fillDrawing) {
@@ -3280,8 +3773,30 @@ $('btnLassoRun').addEventListener('click', async () => {
       lassoState.pts = lassoState.shape === 'rect' ? rectPoly(anchor, p) : ellipsePoly(anchor, p);
       lassoRedraw();
     }
-  });
-  const end = () => {
+  }
+
+  // 第二根手指落下：撤掉第一根手指刚画的半笔，改为缩放手势
+  function toolCancel() {
+    tap = null; pan = null;
+    if (!lassoState.drawing) return;
+    if (lassoState.keepDrawing) lassoState.keepStrokes.pop();
+    else if (lassoState.eraseDrawing) lassoState.eraseStroke = null;
+    else if (lassoState.fillDrawing) lassoState.fillPts = [];
+    else if (ptsBefore) lassoState.pts = ptsBefore;
+    lassoState.drawing = false; lassoState.keepDrawing = false; lassoState.eraseDrawing = false; lassoState.fillDrawing = false;
+    ptsBefore = null;
+    if (lassoState.stage === 'select') $('btnLassoRun').disabled = !lassoReady() || lassoState.busy;
+    lassoRedraw();
+  }
+
+  function toolUp(e) {
+    pan = null;
+    if (tap) {
+      const t = tap; tap = null;
+      if (Math.hypot(e.clientX - t.x, e.clientY - t.y) > 12) return; // 手指滑走了就不算点选
+      if (lassoState.mode === 'erase') runEraseAt(t.pt); else runPickAt(t.pt);
+      return;
+    }
     if (!lassoState.drawing) return;
     const lastEraseStroke = lassoState.eraseDrawing ? lassoState.eraseStroke : null;
     const lastKeepStroke = lassoState.keepDrawing ? lassoState.keepStrokes[lassoState.keepStrokes.length - 1] : null;
@@ -3328,10 +3843,62 @@ $('btnLassoRun').addEventListener('click', async () => {
       lassoRedraw();
       return; // refine 阶段「完成抠像」保持可用
     }
-    $('btnLassoRun').disabled = !lassoReady() || lassoState.busy;
+    ptsBefore = null;
+    // 圈完一松手就开始识别，不用再去找按钮
+    if (selecting() && lassoReady() && !lassoState.busy) { runLassoSelection(); return; }
+    if (lassoState.stage === 'select') $('btnLassoRun').disabled = !lassoReady() || lassoState.busy;
+  }
+
+  const dist = () => { const [a, b] = [...pointers.values()]; return Math.hypot(a.x - b.x, a.y - b.y) || 1; };
+  const mid = () => { const [a, b] = [...pointers.values()]; return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; };
+
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('button')) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    e.preventDefault();
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { stage.setPointerCapture(e.pointerId); } catch { /* 某些环境/合成事件会抛，不影响绘制 */ }
+    if (pointers.size === 2) {
+      toolCancel();
+      pinch = { d0: dist(), m0: mid(), from: { ...lassoView } };
+      waitAllUp = true;
+      $('lassoZoomHint').hidden = true;
+      return;
+    }
+    if (pointers.size > 2 || waitAllUp) return;
+    toolDown(e);
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!pointers.has(e.pointerId)) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch) {
+      if (pointers.size >= 2) {
+        const m = mid();
+        setLassoView(pinch.from.scale * dist() / pinch.d0, pinch.m0.x, pinch.m0.y, pinch.from, m.x - pinch.m0.x, m.y - pinch.m0.y);
+      }
+      return;
+    }
+    if (!waitAllUp) toolMove(e);
+  });
+  const release = (e) => {
+    if (!pointers.delete(e.pointerId)) return;
+    if (pinch && pointers.size < 2) pinch = null;
+    if (waitAllUp) { if (!pointers.size) waitAllUp = false; return; }
+    if (e.type === 'pointercancel') toolCancel(); else toolUp(e);
   };
-  c.addEventListener('pointerup', end);
-  c.addEventListener('pointercancel', end);
+  stage.addEventListener('pointerup', release);
+  stage.addEventListener('pointercancel', release);
+  // 桌面：滚轮以指针为中心缩放；触控板横向滑动则平移
+  stage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    if (!e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      setLassoView(lassoView.scale, e.clientX, e.clientY, { ...lassoView }, -e.deltaX, 0);
+      return;
+    }
+    setLassoView(lassoView.scale * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)), e.clientX, e.clientY);
+  }, { passive: false });
+  $('btnLassoFit').addEventListener('click', resetLassoView);
+  window.addEventListener('resize', () => { if (!$('lassoModal').hidden) resetLassoView(); });
 
   $('lassoShapes').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-shape]');

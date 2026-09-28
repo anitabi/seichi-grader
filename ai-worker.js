@@ -8,7 +8,7 @@ self.onmessage = async (event) => {
   const onProgress = (received, total) => self.postMessage({ type: 'progress', received, total });
   const onStage = (text) => self.postMessage({ type: 'stage', text });
   try {
-    const mobileOpts = mobileModel ? { isnetModelUrl: './models/isnet-anime-512-fp16.onnx', isnetSize: 512 } : {};
+    const mobileOpts = mobileModel ? { isnetModelUrl: './models/isnet-anime-512-w8.onnx', isnetSize: 512 } : {};
     let result;
     if (job === 'region') {
       const chars = await extractCharactersInRegion(imageData, box, {

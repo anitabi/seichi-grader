@@ -17,7 +17,7 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./icon-180.png" />
-  <link rel="stylesheet" href="./style.css?v=20260731-blob-export" />
+  <link rel="stylesheet" href="./style.css?v=20260928-mobile" />
 </head>
 <body>
   <header class="top">
@@ -57,6 +57,10 @@
     <!-- 左：素材 -->
     <section class="panel inputs">
       <div class="sec-title">素材</div>
+      <div class="map-load" id="mapLoad" role="status" aria-live="polite" hidden>
+        <span id="mapLoadText"></span>
+        <button type="button" id="btnMapRetry" class="small" hidden>重试</button>
+      </div>
       <div class="input-row">
         <div class="drop" id="dropAnime">
           <input type="file" id="fileAnime" accept="image/jpeg,image/png,image/webp,.heic,.heif" hidden />
@@ -107,7 +111,6 @@
           <button id="btnOpenExportHub" class="primary" disabled>选择导出方式</button>
           <div hidden>
             <button id="btnExportImg" disabled>导出调色图</button>
-            <button id="btnShareImg" hidden>保存到照片 / 分享</button>
             <button id="btnExportCompare" disabled>导出对比图</button>
             <button id="btnExportWipe" disabled>导出滑动对比动图</button>
             <button id="btnExportMorph" disabled>导出动画→实景 GIF</button>
@@ -158,6 +161,11 @@
             <div class="model-cache">
               <div id="modelCacheStatus">正在检查 AI 离线包…</div>
               <div id="modelCacheHint" class="export-note">基础调色不需要下载 AI 模型。出门前可在 Wi‑Fi 下下载自动抠图离线包。</div>
+              <div class="route-row" id="modelRouteRow" hidden>
+                <label for="modelRoute">下载线路</label>
+                <select id="modelRoute"><option value="auto">自动（下载前测速，选更快的）</option></select>
+              </div>
+              <div id="modelRouteInfo" class="export-note" hidden></div>
               <div id="pwaInstallTip" class="export-note" hidden></div>
               <button id="btnPwaInstall" class="small" hidden>安装为应用（防止系统清除离线模型）</button>
               <button id="btnCacheModels" class="small">下载自动抠图离线包（约 85MB）</button>
@@ -178,14 +186,20 @@
     <!-- 中：预览区 -->
     <section class="panel preview">
       <div class="align-bar" id="alignBar" hidden>
-        <span class="align-tip">拖拽照片对准虚影</span>
-        <label class="mini inline">缩放 <span id="alignZoomVal">100%</span></label>
-        <input type="range" id="alignZoom" min="100" max="300" value="100" />
-        <label class="mini inline">虚影 <span id="alignOpacityVal">50%</span></label>
-        <input type="range" id="alignOpacity" min="15" max="85" value="50" />
-        <button id="btnAlignApply" class="primary small">应用裁剪</button>
-        <button id="btnAlignReset" class="small" hidden>恢复整幅</button>
-        <button id="btnAlignCancel" class="small">取消</button>
+        <span class="align-tip">单指拖动照片对准虚影 · 双指捏合缩放</span>
+        <div class="align-field">
+          <label class="mini">缩放 <span id="alignZoomVal">100%</span></label>
+          <input type="range" id="alignZoom" min="100" max="300" value="100" />
+        </div>
+        <div class="align-field">
+          <label class="mini">虚影 <span id="alignOpacityVal">50%</span></label>
+          <input type="range" id="alignOpacity" min="15" max="85" value="50" />
+        </div>
+        <div class="align-buttons">
+          <button id="btnAlignApply" class="primary small">应用裁剪</button>
+          <button id="btnAlignReset" class="small" hidden>恢复整幅</button>
+          <button id="btnAlignCancel" class="small">取消</button>
+        </div>
       </div>
       <div class="compare" id="compare">
         <div class="compare-stack" id="compareStack">
@@ -368,34 +382,47 @@
     </div>
   </footer>
 
-  <div id="lassoModal" class="lasso-modal" hidden>
+  <div id="lassoModal" class="lasso-modal" hidden role="dialog" aria-modal="true" aria-label="圈选抠像">
     <div class="lasso-head">
       <div class="lasso-guide" id="lassoGuide">
-        <span><b>第一步 · 圈出识别范围</b>：请将目标完全包含在框内。</span>
-        <span><b>第二步 · 补回漏选部分（可选）</b>：识别后用画笔刷开被蒙版遮住的脸、手或发丝。</span>
+        <span><b>第一步 · 圈出识别范围</b>：把目标完整框进去，松手自动识别。</span>
+        <span><b>第二步 · 补回漏选部分（可选）</b>：点选、描边或用画笔刷开被蒙版遮住的脸、手或发丝。</span>
       </div>
       <span id="lassoTip">拖出一个框住角色的矩形——不必精确贴边</span>
-      <div class="lasso-shapes" id="lassoShapes">
+      <div id="lassoStatus" class="lasso-status" role="status" aria-live="polite"></div>
+    </div>
+    <div class="lasso-stage" id="lassoStage">
+      <canvas id="lassoCanvas"></canvas>
+      <button type="button" id="btnLassoFit" class="small lasso-fit" hidden>⤢ 适应屏幕</button>
+      <div class="lasso-zoom-hint" id="lassoZoomHint" hidden>双指捏合放大 · 双指拖动平移</div>
+    </div>
+    <div class="lasso-tools">
+      <div class="lasso-row lasso-shapes" id="lassoShapes">
         <button data-shape="rect" class="small shape-on">▭ 矩形</button>
         <button data-shape="ellipse" class="small">◯ 圆形</button>
         <button data-shape="free" class="small">✎ 画笔</button>
       </div>
-      <div class="lasso-keep">
+      <div class="lasso-row lasso-keep">
         <button type="button" id="btnLassoPick" class="small" hidden>👆 点选补块</button>
         <button type="button" id="btnLassoFill" class="small" hidden>🧲 磁性描边</button>
         <button type="button" id="btnLassoFillConfirm" class="small primary" hidden>✓ 锁定此轮廓</button>
-        <button type="button" id="btnLassoKeep" class="small">🖊 补画（刷开蒙版）</button>
-        <button type="button" id="btnLassoUndo" class="small" hidden>↩ 撤销上一步</button>
-        <label id="lassoKeepSize" hidden><span id="lassoBrushSizeLabel">画笔粗细</span> <input id="lassoKeepBrush" type="range" min="4" max="160" value="36" /></label>
+        <button type="button" id="btnLassoKeep" class="small" title="刷开被蒙版遮住的部分">🖊 补画</button>
+        <button type="button" id="btnLassoAdd" class="small" hidden>⬚ 再圈一处</button>
+        <button type="button" id="btnLassoUndo" class="small" hidden>↩ 撤销</button>
       </div>
-      <div class="lasso-actions">
-        <button id="btnLassoRun" class="primary small" disabled>抠取圈选区域</button>
+      <div class="lasso-row lasso-size" id="lassoKeepSize" hidden>
+        <label for="lassoKeepBrush" id="lassoBrushSizeLabel">画笔粗细</label>
+        <input id="lassoKeepBrush" type="range" min="4" max="120" value="28" />
+        <span id="lassoKeepBrushVal">28</span>
+      </div>
+      <div class="lasso-row lasso-actions">
+        <button id="btnLassoRun" class="primary small" disabled>识别圈选区域</button>
         <span id="loadLasso" class="button-load" role="status" aria-live="polite" hidden></span>
+        <button id="btnLassoReselect" class="small" hidden>重新圈选</button>
         <button id="btnLassoClear" class="small">重画</button>
         <button id="btnLassoClose" class="small">关闭</button>
       </div>
     </div>
-    <div class="lasso-stage"><canvas id="lassoCanvas"></canvas></div>
   </div>
 
   <div id="exportHubModal" class="export-hub" hidden role="dialog" aria-modal="true" aria-labelledby="exportHubTitle">
@@ -422,6 +449,25 @@
     </div>
   </div>
 
+  <div id="exportDone" class="export-done" hidden role="dialog" aria-labelledby="exportDoneTitle">
+    <div class="export-done-card">
+      <img id="exportDonePreview" alt="导出结果预览" hidden />
+      <div class="export-done-info">
+        <b id="exportDoneTitle">已生成，正在下载</b>
+        <span id="exportDoneName"></span>
+        <span id="exportDoneDetail"></span>
+        <span class="export-done-hint">没看到下载提示就点「再次下载」；手机也可长按左侧图片保存。</span>
+      </div>
+      <div class="export-done-actions">
+        <button id="btnExportShare" class="primary small" hidden>分享 / 存到相册</button>
+        <button id="btnExportAgain" class="small">再次下载</button>
+        <button id="btnExportDoneClose" class="small">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
   <div id="entryNotice" class="entry-notice" hidden role="dialog" aria-modal="true" aria-labelledby="entryNoticeTitle">
     <div class="entry-notice-dialog">
       <div class="entry-notice-head">
@@ -429,7 +475,7 @@
         <h2 id="entryNoticeTitle">使用须知</h2>
       </div>
       <ol class="entry-notice-list">
-        <li>模型文件由海外节点分发，内地直连速度不稳定。建议连接代理（日本节点为佳）后再下载。仅使用基础调色功能时无需下载模型。</li>
+        <li id="noticeModelRoute">模型文件由海外节点分发，内地直连速度不稳定。建议连接代理（日本节点为佳）后再下载。仅使用基础调色功能时无需下载模型。</li>
         <li>建议将本站安装为应用。安装后已下载的离线模型将持久保留于本机，不受系统定期清理影响，并可从主屏幕启动、离线使用；模型仅需下载一次。</li>
       </ol>
       <div id="entryNoticeIosSteps" class="entry-notice-ios" hidden>
@@ -453,6 +499,6 @@
       }
     })();
   </script>
-  <script type="module" src="./app.js?v=20260731-blob-export"></script>
+  <script type="module" src="./app.js?v=20260928-mobile"></script>
 </body>
 </html>

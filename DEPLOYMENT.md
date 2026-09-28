@@ -8,6 +8,12 @@
 
 GitHub 仓库普通 Git 对单文件有 100MB 硬限制；当前最大模型约 84MB，虽未越线，但整个模型目录会显著拖慢 clone 与部署。代码与模型分离仍是更稳妥的做法。
 
+## 国内模型线路（阿里云）
+
+模型与 onnxruntime-web 运行时可以额外放一份到阿里云，访客下载前自动测速、按需分配到更快的线路，
+一条失败自动换另一条。线路定义在 `model-mirrors.js`，服务器配置、上传脚本与测速方法见
+[`deploy/aliyun/README.md`](./deploy/aliyun/README.md)。
+
 ## 必需响应头
 
 项目根目录 `_headers` 已写入 COOP/COEP/CORP。Netlify 和部分 Pages 平台会读取它；其他平台需在控制台手动添加：

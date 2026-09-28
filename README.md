@@ -62,6 +62,8 @@ http://localhost:8126/
 - `ai-segment.js`：浏览器内 AI 抠图（整图直抠 + 检测→裁剪→抠→合并流水线）
 - `detect.js`：动画人物检测（YOLOv8s，先找角色框再抠，解决多人同框/小角色）
 - `ort-env.js`：onnxruntime-web 加载与模型会话缓存
+- `model-mirrors.js`：模型下载线路（日本 CF / 阿里云），`sw.js` 按访客测速结果改道并自动故障切换
+- `deploy/aliyun/`：阿里云模型线路的 Nginx 配置与部署说明（上传脚本 `tools/sync-models-aliyun.sh`）
 - `models/isnet-anime-fp16.onnx`：AI 抠图模型（ISNet-anime）
 - `models/person-detect.onnx`：人物检测模型（deepghs/anime_person_detection，static-int8）
 - `models/scene-embed-int8.onnx`：动画截图与实景图匹配模型（DINOv3 ViT-S/16）
