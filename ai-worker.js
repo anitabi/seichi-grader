@@ -1,6 +1,6 @@
 // One-shot AI worker. Terminating it after each job returns the whole WASM heap to WebKit,
 // which Tensor.dispose()/Session.release() alone cannot guarantee on iOS.
-import { extractCharactersAI, extractForegroundAI, extractCharactersInRegion } from './ai-segment.js';
+import { extractCharactersAI, extractCharactersInRegion } from './ai-segment.js?v=20260929-fallback3';
 import { releaseAllSessions } from './ort-env.js';
 
 self.onmessage = async (event) => {
@@ -18,21 +18,22 @@ self.onmessage = async (event) => {
       });
       result = { chars };
     } else {
-      const seg = await extractCharactersAI(imageData, { hires, samFallback, ...mobileOpts, onProgress, onStage });
-      let whole = null;
-      if (!seg.chars.length) {
-        onStage('未检测到角色，改用整图抠取…');
-        whole = await extractForegroundAI(imageData, {
-          modelUrl: mobileOpts.isnetModelUrl, inputSize: mobileOpts.isnetSize, onProgress, onStage,
-        });
+      let seg = await extractCharactersAI(imageData, { hires, samFallback, ...mobileOpts, onProgress, onStage });
+      // 一个人都没检测到：自动用「加强搜索」（更大分辨率 + 更低阈值）再找一遍，省得用户自己点。
+      // 不再退化成「整图直抠」——实测 74 张真实动画帧里，整图兜底 7 次抠出杂物
+      // （字幕、出租车、整碗饭，最大占画面 81%），只有 1 次碰巧是对的；找不到就老实说找不到，交给手动框选。
+      let escalated = false;
+      if (!seg.chars.length && !hires) {
+        onStage('没找到，加强搜索小角色…');
+        seg = await extractCharactersAI(imageData, { hires: true, samFallback, ...mobileOpts, onProgress, onStage });
+        escalated = true;
       }
-      result = { seg, whole };
+      result = { seg, escalated };
     }
     await releaseAllSessions();
     const buffers = [];
     const chars = result.seg?.chars || result.chars || [];
     for (const char of chars) if (char.alpha?.buffer) buffers.push(char.alpha.buffer);
-    if (result.whole?.alpha?.buffer) buffers.push(result.whole.alpha.buffer);
     self.postMessage({ type: 'done', result }, [...new Set(buffers)]);
   } catch (error) {
     await releaseAllSessions();

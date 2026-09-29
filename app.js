@@ -647,7 +647,7 @@ function applyRefine(resetPos) {
 // 即便是桌面浏览器也统一交给一次性 Worker，避免用户在等待时点击任何控件就让标签页假死。
 function runAIInWorker(imageData, opts = {}) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker('./ai-worker.js?v=20260929-redesign', { type: 'module', name: 'seichi-ai-once' });
+    const worker = new Worker('./ai-worker.js?v=20260929-fallback3', { type: 'module', name: 'seichi-ai-once' });
     // 看门狗：3 分钟没有任何进度消息（iOS 悄悄杀掉 Worker、下载卡死）就放弃，别让界面永远停在「忙」
     let watchdog = 0;
     const arm = () => {
@@ -701,7 +701,8 @@ async function addCharacter({ hires = false } = {}) {
       catch (retryError) { retryError.cause = firstError; throw retryError; }
     }
     if (state.anime !== anime) return;
-    const { seg, whole } = aiResult;
+    const { seg, escalated } = aiResult;
+    if (escalated) state.hiresTried = true; // 一个都没找到时 worker 已自动加强搜索过
     const secs = ((performance.now() - t0) / 1000).toFixed(0);
     if (seg.chars.length) {
       const included = new Set(seg.chars.map((c, i) => (c.empty ? -1 : i)).filter((i) => i >= 0));
@@ -709,17 +710,16 @@ async function addCharacter({ hires = false } = {}) {
       applyCharSelection(true);
       const nEmpty = seg.chars.filter((c) => c.empty).length;
       const n = seg.chars.length - nEmpty;
-      updateCharUI({ failed: nEmpty > 0 || !state.cutout, msg: nEmpty ? `还有 ${nEmpty} 个角色太小，没抠出来` : '' });
+      const notes = [];
+      if (seg.capped) notes.push('画面里人很多，只处理了最显眼的一部分');
+      if (nEmpty) notes.push(`还有 ${nEmpty} 个角色太小，没抠出来`);
+      updateCharUI({ failed: nEmpty > 0 || !state.cutout, msg: notes.join('；') });
       setStatus(state.cutout ? `已抠出 ${n} 个角色（${secs} 秒）· 拖动摆放，双指缩放` : '没能抠出角色');
     } else {
-      // 没检测到角色：回退整图直抠，风景图会正确报"未找到"
+      // 没找到就老实说没找到，不再硬抠「画面里最显眼的东西」（那多半是建筑、食物、字幕）
       setCharSeg(null);
-      state.rawAlpha = whole.alpha; state.rawW = whole.width; state.rawH = whole.height;
-      applyRefine(true);
-      updateCharUI(state.cutout
-        ? { msg: '没检测到人物，已按画面里最显眼的主体抠出。' }
-        : { failed: true, msg: '没找到角色。画面里有小角色的话，可以加强搜索或手动框选' });
-      setStatus(state.cutout ? '已按主体抠出，拖动摆放' : '没找到角色');
+      updateCharUI({ failed: true, msg: '没找到角色。画面里的角色如果很小、被遮挡或不是人形，请手动框选' });
+      setStatus('没找到角色');
     }
   } catch (e) {
     console.error(e); rememberError('add-character', e);

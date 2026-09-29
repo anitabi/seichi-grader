@@ -141,14 +141,26 @@ async function extractForegroundAI(imageData, opts = {}) {
 // opts.hires: 远景小人模式（1536 检测 + 低置信度阈值）
 async function extractCharactersAI(imageData, opts = {}) {
   const hires = !!opts.hires;
-  const boxes = await detectPersons(imageData, {
+  const maxDet = 8;
+  const W = imageData.width, H = imageData.height;
+  const detected = await detectPersons(imageData, {
     size: hires ? 1536 : 1024,
     conf: hires ? 0.12 : 0.25,
+    maxDet,
     onProgress: opts.onProgress,
     onStage: opts.onStage,
   });
+  // 大框 + 低置信度基本是误检：实测「加强搜索」(conf 0.12) 会把碎石地、汉堡整块当成人（占画面 24%~33%），
+  // 首轮 0.39 分的整盘食物也是这样。真正的大角色置信度都很高；加强搜索本来就只为找「小」角色，
+  // 所以那一轮直接不接受大于画面 12% 的框。
+  const boxes = detected.filter((b) => {
+    const area = (b.w * b.h) / (W * H);
+    if (b.score < 0.5 && area > 0.2) return false;
+    if (b.score < 0.7 && area > 0.4) return false; // 整块甜点特写 0.61 分、占画面近六成，真正的大特写角色是 0.8+
+    if (hires && area > 0.12) return false;
+    return true;
+  });
 
-  const W = imageData.width, H = imageData.height;
   const chars = [];
   // 第一阶段：所有框只跑 ISNet。不要在循环中交错加载 SAM，否则检测器、
   // ISNet、SAM encoder/decoder 会同时常驻 WASM 堆，iOS 峰值可达数 GB。
@@ -167,11 +179,24 @@ async function extractCharactersAI(imageData, opts = {}) {
     const res = await extractForegroundAI(crop, {
       onProgress: opts.onProgress, modelUrl: opts.isnetModelUrl, inputSize: opts.isnetSize,
     });
-    chars.push({ box: b, rect, score: b.score, alpha: res.alpha, empty: res.empty, via: 'isnet' });
+    // 质量闸：ISNet 名义上有输出，但前景占裁剪区 <4%（噪声被归一化放大成稀碎的假 mask）
+    // 或 >85%（整块矩形，人形不可能占满带外扩的裁剪框）都不可信，按「没抠出」处理，交给 SAM 兜底。
+    // 实测（74 张真实巡礼动画帧）：远景人群/小人里出现的「带着背景的方块」就是这种输出。
+    let empty = res.empty;
+    if (!empty) {
+      let cnt = 0;
+      for (let k = 0; k < res.alpha.length; k++) if (res.alpha[k] > 127) cnt++;
+      const frac = cnt / res.alpha.length;
+      if (frac < 0.04 || frac > 0.85) empty = true;
+    }
+    chars.push({ box: b, rect, score: b.score, alpha: res.alpha, empty, via: 'isnet' });
   }
 
   // 第二阶段：释放检测器/ISNet，再集中处理所有需要 SAM 的框。
-  const fallback = chars.map((char, i) => char.empty ? i : -1).filter((i) => i >= 0);
+  // SAM 每个框要十几秒（桌面单线程更久）：人群画面里最多只兜底框面积最大的 3 个，其余保持「太小没抠出」，
+  // 时间有上界；抠不出的可以用「手动框选」单独补。
+  const fallback = chars.map((char, i) => (char.empty ? i : -1)).filter((i) => i >= 0)
+    .sort((a, b) => chars[b].box.w * chars[b].box.h - chars[a].box.w * chars[a].box.h).slice(0, 3);
   if (fallback.length && opts.samFallback !== false) {
     opts.onStage && opts.onStage('释放检测模型，准备 SAM 小角色兜底…');
     await releaseAllSessions();
@@ -195,7 +220,8 @@ async function extractCharactersAI(imageData, opts = {}) {
       }
     }
   }
-  return { chars, width: W, height: H };
+  // capped：检测框数触顶（画面里人比 maxDet 多），提示用户只处理了最显眼的一部分
+  return { chars, width: W, height: H, capped: detected.length >= maxDet };
 }
 
 // 手动圈选（LR 式）：在用户指定的范围内智能检测并抠取角色。
