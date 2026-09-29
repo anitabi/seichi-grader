@@ -647,7 +647,7 @@ function applyRefine(resetPos) {
 // 即便是桌面浏览器也统一交给一次性 Worker，避免用户在等待时点击任何控件就让标签页假死。
 function runAIInWorker(imageData, opts = {}) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker('./ai-worker.js?v=20260929-fallback3', { type: 'module', name: 'seichi-ai-once' });
+    const worker = new Worker('./ai-worker.js?v=20260929-manual3', { type: 'module', name: 'seichi-ai-once' });
     // 看门狗：3 分钟没有任何进度消息（iOS 悄悄杀掉 Worker、下载卡死）就放弃，别让界面永远停在「忙」
     let watchdog = 0;
     const arm = () => {

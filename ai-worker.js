@@ -1,6 +1,6 @@
 // One-shot AI worker. Terminating it after each job returns the whole WASM heap to WebKit,
 // which Tensor.dispose()/Session.release() alone cannot guarantee on iOS.
-import { extractCharactersAI, extractCharactersInRegion } from './ai-segment.js?v=20260929-fallback3';
+import { extractCharactersAI, extractCharactersInRegion } from './ai-segment.js?v=20260929-manual3';
 import { releaseAllSessions } from './ort-env.js';
 
 self.onmessage = async (event) => {

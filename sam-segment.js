@@ -58,6 +58,9 @@ function looksRectangular(alpha, w, h) {
 
 // 对裁剪区跑 SAM：innerBox 是检测框在裁剪区坐标系里的位置，
 // 取框中心线上 3 个点做正向提示。返回 alpha(Uint8, 裁剪区尺寸)；拒收返回 null。
+// opts.positives：自定义正提示点（裁剪区坐标）；opts.negatives：负提示点（标出「肯定是背景」的位置，
+//   用户框的四个角就是很好的负点）；opts.allMasks：返回 SAM 的 3 个候选 mask（小/中/大）让调用方按
+//   「与用户框的吻合度」自己挑，而不是只信 SAM 自评的 IoU；opts.lenient：不做「像矩形就拒收」。
 async function samMaskForBox(imageData, innerBox, opts = {}) {
   // SlimSAM 的 LayerNorm/Resize 组合在 WebGPU EP 尚不稳定，统一 WASM
   const { ort, session: enc } = await getSession(ENC_URL, { onProgress: opts.onProgress, eps: [['wasm']] });
@@ -80,15 +83,19 @@ async function samMaskForBox(imageData, innerBox, opts = {}) {
     [cx, innerBox.y + innerBox.h * 0.25],
     [cx, innerBox.y + innerBox.h * 0.75],
   ];
-  if (opts.points && opts.points.length) {
+  if (opts.positives && opts.positives.length) pts = opts.positives;
+  else if (opts.points && opts.points.length) {
     pts = [...opts.points, [cx, innerBox.y + innerBox.h * 0.5]];
   }
-  const coords = new Float32Array(pts.length * 2);
-  pts.forEach((p, i) => { coords[i * 2] = p[0] * scale; coords[i * 2 + 1] = p[1] * scale; });
-  const labels = new BigInt64Array(pts.length).fill(1n);
+  const negs = opts.negatives || [];
+  const all = [...pts, ...negs];
+  const coords = new Float32Array(all.length * 2);
+  all.forEach((p, i) => { coords[i * 2] = p[0] * scale; coords[i * 2 + 1] = p[1] * scale; });
+  const labels = new BigInt64Array(all.length);
+  for (let i = 0; i < pts.length; i++) labels[i] = 1n; // 其余保持 0n = 负点
 
-  pointsTensor = new ort.Tensor('float32', coords, [1, 1, pts.length, 2]);
-  labelsTensor = new ort.Tensor('int64', labels, [1, 1, pts.length]);
+  pointsTensor = new ort.Tensor('float32', coords, [1, 1, all.length, 2]);
+  labelsTensor = new ort.Tensor('int64', labels, [1, 1, all.length]);
   decOut = await dec.run({
     input_points: pointsTensor,
     input_labels: labelsTensor,
@@ -102,25 +109,31 @@ async function samMaskForBox(imageData, innerBox, opts = {}) {
 
   // 256×256 logits（对应补边后的 1024 空间）→ 画到 canvas → 裁有效区放大回裁剪尺寸
   const MS = 256;
-  const mc = createCanvas(MS, MS);
-  const mctx = mc.getContext('2d');
-  const mimg = mctx.createImageData(MS, MS);
-  const off = best * MS * MS;
-  for (let i = 0; i < MS * MS; i++) {
-    const v = masks[off + i] > 0 ? 255 : 0;
-    mimg.data[i * 4] = v; mimg.data[i * 4 + 1] = v; mimg.data[i * 4 + 2] = v; mimg.data[i * 4 + 3] = 255;
-  }
-  mctx.putImageData(mimg, 0, 0);
-  const oc = createCanvas(W, H);
-  const octx = oc.getContext('2d');
-  octx.imageSmoothingEnabled = true;
-  octx.drawImage(mc, 0, 0, vw / 4, vh / 4, 0, 0, W, H);
-  const od = octx.getImageData(0, 0, W, H).data;
-  const alpha = new Uint8ClampedArray(W * H);
-  for (let i = 0, p = 0; i < od.length; i += 4, p++) alpha[p] = od[i];
+  const toAlpha = (idx) => {
+    const mc = createCanvas(MS, MS);
+    const mctx = mc.getContext('2d');
+    const mimg = mctx.createImageData(MS, MS);
+    const off = idx * MS * MS;
+    for (let i = 0; i < MS * MS; i++) {
+      const v = masks[off + i] > 0 ? 255 : 0;
+      mimg.data[i * 4] = v; mimg.data[i * 4 + 1] = v; mimg.data[i * 4 + 2] = v; mimg.data[i * 4 + 3] = 255;
+    }
+    mctx.putImageData(mimg, 0, 0);
+    const oc = createCanvas(W, H);
+    const octx = oc.getContext('2d');
+    octx.imageSmoothingEnabled = true;
+    octx.drawImage(mc, 0, 0, vw / 4, vh / 4, 0, 0, W, H);
+    const od = octx.getImageData(0, 0, W, H).data;
+    const alpha = new Uint8ClampedArray(W * H);
+    for (let i = 0, p = 0; i < od.length; i += 4, p++) alpha[p] = od[i];
+    return alpha;
+  };
+  if (opts.allMasks) return [0, 1, 2].map(toAlpha);
 
+  const alpha = toAlpha(best);
   const shape = looksRectangular(alpha, W, H);
-  if (shape.empty || shape.reject) return null;
+  if (shape.empty) return null;
+  if (shape.reject && !opts.lenient) return null;
   return alpha;
   } finally {
     encInput.dispose?.();
