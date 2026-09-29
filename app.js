@@ -9,7 +9,7 @@ import { mergeCharacterAlphas } from './ai-segment.js';
 import { releaseAllSessions, MODEL_BASE } from './ort-env.js';
 import { embedImage, cosineSimilarity, SCENE_EMBED_MODEL_URL } from './embed.js';
 import { profile as DEVICE } from './platform.js';
-import { launchViewfinder } from './camera/viewfinder.js?v=20260929-redesign';
+import { launchViewfinder } from './camera/viewfinder.js?v=20260929-white';
 import {
   MAX_DIM, isHeicFile, isImageFile, fileToImageData, readExifGPS,
   urlToImageData, canvasToPhotoData, imageReady,
@@ -58,6 +58,15 @@ const $ = (id) => document.getElementById(id);
 const HINT_KEY = 'seichi-hint-compare-v1';
 const hasFlag = (k) => { try { return !!localStorage.getItem(k); } catch { return false; } };
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// 滑杆已走过的部分用主色：CSS 没法按 value 给轨道上色，把百分比写进 --pct（见 style.css）。
+// 用户拖动时由 input 事件更新；代码里直接改 .value 的地方要自己调 paintRange。
+function paintRange(el) {
+  const min = Number(el.min) || 0, max = Number(el.max) || 100;
+  el.style.setProperty('--pct', ((Number(el.value) - min) / (max - min)) * 100 + '%');
+}
+const paintRanges = () => document.querySelectorAll('input[type=range]').forEach(paintRange);
+document.addEventListener('input', (e) => { if (e.target.type === 'range') paintRange(e.target); });
 
 // 把浏览器/ORT 的英文报错翻成人话：用户能据此决定「换个网络」还是「换张图」
 function friendlyError(e) {
@@ -283,7 +292,7 @@ function drawLeftLayer() {
   } else {
     drawToCanvas(o, state.photo.imgData);
   }
-  $('badgeLeft').textContent = state.left === 'anime' ? '动画 ⇄' : '原图 ⇄';
+  $('badgeLeftText').textContent = state.left === 'anime' ? '动画' : '原图';
 }
 
 $('badgeLeft').addEventListener('click', () => {
@@ -519,6 +528,7 @@ function compositeCharacter(canvas, record = true) {
 function setCharScale(value) {
   const v = clamp(Math.round(Number(value) || 100), 20, 300);
   $('charScale').value = v;
+  paintRange($('charScale'));
   $('charScaleVal').textContent = v + '%';
   redrawComposite();
 }
@@ -558,7 +568,7 @@ function clearCharacter() {
   state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 };
   invalidateHarmonize();
   setCharSeg(null);
-  $('charScale').value = 100; $('charScaleVal').textContent = '100%';
+  $('charScale').value = 100; $('charScaleVal').textContent = '100%'; paintRange($('charScale'));
   updateCharUI({});
   redrawComposite();
 }
@@ -884,7 +894,7 @@ function openRefine(tool = 'erase') {
   c.style.width = rf.base.w + 'px'; c.style.height = rf.base.h + 'px';
   rf.view = { s: 1, x: 0, y: 0 };
   rfApplyView();
-  $('rfErode').value = state.erode; $('rfErodeVal').textContent = state.erode + 'px';
+  $('rfErode').value = state.erode; $('rfErodeVal').textContent = state.erode + 'px'; paintRange($('rfErode'));
   rfBuildOverlay();
   rfSetTool(tool);
   $('rfUndo').disabled = !state.maskOps.length;
@@ -1081,6 +1091,7 @@ async function loadPhotoBitmap(norm = null) {
 
 function setAlignZoomUI(zoom) {
   $('alignZoom').value = Math.round(zoom);
+  paintRange($('alignZoom'));
   $('alignZoomVal').textContent = Math.round(zoom) + '%';
 }
 
@@ -1767,6 +1778,7 @@ function applySettings(saved) {
     else $(id).value = String(saved.values[id]);
   }
   for (const [id, label] of Object.entries(GRADE_LABELS)) $(label).textContent = $(id).value + '%';
+  paintRanges();
   if (state.anime && state.photo) recompute();
 }
 
@@ -1953,6 +1965,7 @@ $('btnDiagnostics').addEventListener('click', async () => {
 })();
 
 // ---------- 启动 ----------
+paintRanges();
 updateUI();
 recompute(); // 没有图片时：隐藏对比滑块等控件，只留空状态说明
 loadFromQuery();
