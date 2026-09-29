@@ -415,17 +415,26 @@ async function loadFromQuery() {
   let u;
   try { u = new URL(url); } catch { return; }
   if (u.protocol !== 'https:' || !/(^|\.)anitabi\.cn$/i.test(u.hostname)) {
-    console.warn('忽略不受信任的跳转图片来源：', url); // 静默回到空状态，不打断正常上传引导
+    // 只接受 https 的 anitabi.cn 图片（防止被构造链接载入任意外部图片）。但别静默丢掉：
+    // 地图带了别的域名的图时，用户要知道为什么没带过来
+    console.warn('忽略不受信任的跳转图片来源：', url);
+    setStatus(`地图带来的图片地址（${u.hostname}）不在允许范围内，没有自动载入。请手动选择动画截图`, 10000);
     return;
   }
   const name = params.get('name') || '';
   try {
     setStatus(name ? `正在载入「${name}」的动画截图…` : '正在载入动画截图…', 0);
-    await handleAnimeData(await urlToImageData(url));
+    // 网络抖一下就丢图太可惜：失败后等一会儿再试一次
+    let data;
+    try { data = await urlToImageData(url); }
+    catch { await new Promise((r) => setTimeout(r, 1500)); data = await urlToImageData(url); }
+    await handleAnimeData(data);
     state.fromMap = { name, bid: params.get('bid') || '', pid: params.get('pid') || '', g: params.get('g') || '' };
     setStatus(name ? `已载入「${name}」· 接下来到现场拍摄，或选一张已有照片` : '动画截图已载入 · 接下来拍摄或选一张实景照片', 7000);
   } catch (e) {
-    setStatus('动画截图载入失败（' + (e.message || e) + '）· 你仍可手动选择', 9000);
+    // 常驻提示，别几秒后就消失：用户得知道图为什么没带过来，并且知道能手动选
+    rememberError('load-from-map', e);
+    setStatus('没能自动载入地图上的动画截图（网络或图片服务器问题）。可以点左上「动画截图」手动选一张，或刷新页面重试', 0);
   }
 }
 
