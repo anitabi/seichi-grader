@@ -8,7 +8,9 @@ self.onmessage = async (event) => {
   const onProgress = (received, total) => self.postMessage({ type: 'progress', received, total });
   const onStage = (text) => self.postMessage({ type: 'stage', text });
   try {
-    const mobileOpts = mobileModel ? { isnetModelUrl: './models/isnet-anime-512-fp16.onnx', isnetSize: 512 } : {};
+    // iPhone/iPad 用 512 输入的 w8 版。路径必须与 ort-env.js 的 CHUNKED_MODELS 和 app.js 的 ISNET_URL 一致：
+    // 之前这里写死了已不在线上的 512-fp16 整文件，苹果设备上 AI 抠图会 404。
+    const mobileOpts = mobileModel ? { isnetModelUrl: './models/isnet-anime-512-w8.onnx', isnetSize: 512 } : {};
     let result;
     if (job === 'region') {
       const chars = await extractCharactersInRegion(imageData, box, {

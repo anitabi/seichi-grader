@@ -1,6 +1,6 @@
-// overlay-renderer.js — 把动画参考图叠在实时取景上，四种观察模式。
+// overlay-renderer.js — 把动画参考图叠在实时取景上，两种观察模式。
 // 参考图预处理一次（缩放、预算轮廓），之后每帧只做轻量绘制。
-// 模式：transparent(半透明) / outline(轮廓) / blink(闪烁) / split(左右分割)。
+// 模式：transparent(半透明) / outline(轮廓，阳光下半透明发白时用)。
 import { rotateCanvas } from '../canvas-util.js';
 
 class OverlayRenderer {
@@ -8,9 +8,6 @@ class OverlayRenderer {
   constructor(refImage) {
     this.mode = 'transparent';
     this.opacity = 0.5;
-    this.split = 0.5;         // split 模式分割线位置 0..1
-    this.blinkOn = true;
-    this._blinkTimer = 0;
     this._src = this._toCanvas(refImage); // 原始方向的参考图
     this.rotation = 0;        // 参考图顺时针旋转角（锁定竖屏横拍时用）
     this.ref = this._src;
@@ -50,12 +47,10 @@ class OverlayRenderer {
   setMode(mode) {
     this.mode = mode;
     if (mode === 'outline' && !this.outline) this.outline = this._buildOutline();
-    if (mode === 'blink') this._startBlink(); else this._stopBlink();
   }
   setOpacity(v) { this.opacity = Math.max(0, Math.min(1, v)); }
-  setSplit(v) { this.split = Math.max(0, Math.min(1, v)); }
 
-  // Sobel 边缘 → 白色描边（透明底），用于轮廓模式。只算一次。
+  // Sobel 边缘 → 青色描边（透明底），用于轮廓模式。只算一次。
   _buildOutline() {
     const w = this.ref.width, h = this.ref.height;
     const src = this.ref.getContext('2d').getImageData(0, 0, w, h).data;
@@ -65,7 +60,7 @@ class OverlayRenderer {
     }
     const out = document.createElement('canvas'); out.width = w; out.height = h;
     const od = out.getContext('2d').createImageData(w, h);
-    // 稳健归一化：先求 98 分位做上限，避免个别强边吃掉对比
+    // 稳健归一化：先求最大值，避免个别强边吃掉对比
     let maxMag = 1;
     const mags = new Float32Array(w * h);
     for (let y = 1; y < h - 1; y++) {
@@ -90,12 +85,6 @@ class OverlayRenderer {
     return out;
   }
 
-  _startBlink() {
-    this._stopBlink();
-    this._blinkTimer = setInterval(() => { this.blinkOn = !this.blinkOn; }, 500);
-  }
-  _stopBlink() { if (this._blinkTimer) { clearInterval(this._blinkTimer); this._blinkTimer = 0; } this.blinkOn = true; }
-
   // 把参考图按 cover 方式铺满目标框，返回绘制矩形（保持参考图比例、居中裁切）。
   _coverRect(dw, dh) {
     const s = Math.max(dw / this.ref.width, dh / this.ref.height);
@@ -107,32 +96,20 @@ class OverlayRenderer {
   // 这样在 object-fit: contain 产生黑边时，参考图不会漂到黑边上。
   render(ctx, dw, dh, frame = { x: 0, y: 0, width: dw, height: dh }) {
     ctx.clearRect(0, 0, dw, dh);
-    const fw = frame.width, fh = frame.height;
-    const r = this._coverRect(fw, fh);
+    const r = this._coverRect(frame.width, frame.height);
     ctx.save();
     ctx.translate(frame.x, frame.y);
-    if (this.mode === 'transparent') {
-      ctx.globalAlpha = this.opacity;
-      ctx.drawImage(this.ref, r.x, r.y, r.w, r.h);
-    } else if (this.mode === 'outline') {
+    if (this.mode === 'outline') {
       ctx.globalAlpha = Math.max(0.7, this.opacity);
       ctx.drawImage(this.outline || this.ref, r.x, r.y, r.w, r.h);
-    } else if (this.mode === 'blink') {
-      if (this.blinkOn) { ctx.globalAlpha = 1; ctx.drawImage(this.ref, r.x, r.y, r.w, r.h); }
-    } else if (this.mode === 'split') {
-      const clipW = dw * this.split;
-      ctx.beginPath(); ctx.rect(0, 0, clipW, dh); ctx.clip();
-      ctx.globalAlpha = 1;
+    } else {
+      ctx.globalAlpha = this.opacity;
       ctx.drawImage(this.ref, r.x, r.y, r.w, r.h);
-      ctx.restore(); ctx.save();
-      // 分割线
-      ctx.globalAlpha = 1; ctx.strokeStyle = 'rgba(120,235,255,.95)'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(clipW, 0); ctx.lineTo(clipW, dh); ctx.stroke();
     }
     ctx.restore();
   }
 
-  destroy() { this._stopBlink(); }
+  destroy() {}
 }
 
 export { OverlayRenderer };

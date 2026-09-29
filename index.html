@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-phase="empty">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="description" content="从动画截图提取色调和配色，一键套用到实景圣地巡礼照片；还可把动画角色合成进实景画面。" />
+  <meta name="description" content="把动画截图的色调带到你拍的圣地巡礼照片上：现场叠加取景、自动调色、一键保存对照图。" />
   <meta name="theme-color" content="#ffffff" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
@@ -17,430 +17,264 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./icon-180.png" />
-  <link rel="stylesheet" href="./style.css?v=20260731-blob-export" />
+  <link rel="stylesheet" href="./style.css?v=20260929-redesign" />
 </head>
 <body>
-  <header class="top">
-    <div class="top-inner">
-      <div class="brand">
-        <span class="logo">聖</span>
-        <div class="brand-text">
-          <h1>聖地巡礼 · 调色对比生成器</h1>
-          <p class="sub">提取动画截图的影调与配色，套用到实景照片</p>
-        </div>
-      </div>
-      <div class="top-actions">
-        <button id="btnSunlight" class="sun-toggle" aria-pressed="false"
-          title="户外强光模式：拉高界面对比与亮度、增强取景叠加可读性。不改变调色预览，保证色准。">☀️ 强光</button>
-        <nav class="top-nav">
-          <span class="tag">CDF 影调 · MKL 色彩</span>
-          <span class="tag">可导出 .cube LUT</span>
-        </nav>
-      </div>
-    </div>
+  <header class="bar">
+    <span class="logo">聖</span>
+    <h1>巡礼调色</h1>
+    <button id="btnMenu" class="icon-btn" aria-label="更多：离线模型、关于">⋯</button>
   </header>
 
-  <div class="page">
-  <nav class="workflow" aria-label="使用流程">
-    <div class="workflow-title">第一次使用</div>
-    <ol id="workflowSteps">
-      <li data-step="anime" class="current"><span>1</span>上传动画截图</li>
-      <li data-step="photo"><span>2</span>拍摄或上传实景</li>
-      <li data-step="grade"><span>3</span>调色完成</li>
-      <li data-step="compose"><span>4</span>合成角色 <em>可选</em></li>
-      <li data-step="export"><span>5</span>导出分享</li>
-    </ol>
-  </nav>
-  <main class="layout">
-    <!-- 左列：素材 + 导出。桌面端两块堆在左列使两侧等长；移动端经 display:contents + order 还原为原线性顺序 -->
-    <div class="col col-left">
-    <!-- 左：素材 -->
-    <section class="panel inputs">
-      <div class="sec-title">素材</div>
-      <div class="input-row">
-        <div class="drop" id="dropAnime">
-          <input type="file" id="fileAnime" accept="image/jpeg,image/png,image/webp,.heic,.heif" hidden />
-          <div class="drop-inner">
-            <strong>① 动画截图</strong>
-            <span class="hint">取风格</span>
-          </div>
-          <img class="thumb" id="thumbAnime" alt="" hidden />
-        </div>
-        <div class="drop" id="dropPhoto">
-          <input type="file" id="filePhoto" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" hidden />
-          <div class="drop-inner">
-            <strong>② 实景照片</strong>
-            <span class="hint">被调色</span>
-          </div>
-          <img class="thumb" id="thumbPhoto" alt="" hidden />
-        </div>
+  <main class="app">
+    <div class="stage-col">
+      <!-- 素材条：永远显示两张图的状态，下一步没做的那格会高亮，取代原来的「五步流程条」 -->
+      <div class="assets" id="assets">
+        <button type="button" class="slot" id="slotAnime" aria-label="动画截图：点击选择或更换">
+          <span class="slot-thumb"><img id="thumbAnime" alt="" hidden /></span>
+          <span class="slot-text"><b>① 动画截图</b><small id="slotAnimeHint">点此选择</small></span>
+        </button>
+        <button type="button" class="slot" id="slotPhoto" aria-label="实景照片：点击拍摄或选择">
+          <span class="slot-thumb"><img id="thumbPhoto" alt="" hidden /></span>
+          <span class="slot-text"><b>② 实景照片</b><small id="slotPhotoHint">拍摄或选择</small></span>
+        </button>
       </div>
-      <button id="btnShoot" class="ghost shoot-btn">📷 现场取景拍摄（预览辅助线）</button>
-      <div class="match-entry">
-        <div class="button-load-row">
-          <button id="btnMatchScene" class="ghost shoot-btn" disabled>🔍 匹配对应照片</button>
-          <span id="loadMatchScene" class="button-load" role="status" aria-live="polite" hidden></span>
-        </div>
-        <p class="match-help">从多张实景图中寻找与动画截图最匹配的一张；只放入实景照片时，也可反向匹配动画截图。</p>
-      </div>
-      <input type="file" id="matchFiles" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" multiple hidden />
-      <div class="match-results" id="matchResults" hidden>
-        <label id="matchResultsLabel">全部照片已按相似度排序；左右滑动并点选作为实景照片</label>
-        <div class="match-grid" id="matchGrid"></div>
-      </div>
-      <label class="check compact">
-        <input type="checkbox" id="ignoreSub" checked />
-        <span>忽略动画底部字幕带</span>
-      </label>
 
-      <div class="palette-box">
-        <label>动画主色</label>
-        <div class="palette" id="palette"></div>
+      <div class="stage" id="stage">
+        <div class="compare" id="compare">
+          <canvas id="canvasGraded"></canvas>
+          <div class="compare-clip" id="clip"><canvas id="canvasOrig"></canvas></div>
+          <div class="handle" id="handle"><span></span></div>
+          <img id="alignGhost" alt="" hidden />
+          <button type="button" class="badge left" id="badgeLeft" title="点击切换：对照原图 / 对照动画">原图 ⇄</button>
+          <div class="badge right" id="badgeRight">调色后</div>
+        </div>
+        <div class="hero" id="emptyHint">
+          <div class="hero-mark">聖</div>
+          <h2>把动画里的色调，带到你拍的照片上</h2>
+          <ol>
+            <li>选一张动画截图</li>
+            <li>到现场拍摄，对准半透明虚影</li>
+            <li>自动调色，保存对照图</li>
+          </ol>
+        </div>
+        <div class="stage-status" id="status" role="status" aria-live="polite" hidden></div>
       </div>
-    </section>
+    </div>
 
-    <!-- 导出（桌面端置于左列下方；移动端经 order 仍排在角色合成之后） -->
-    <section class="panel exports">
-      <div class="sec">
-        <div class="sec-title">导出</div>
-        <div class="actions">
-          <button id="btnOpenExportHub" class="primary" disabled>选择导出方式</button>
-          <div hidden>
-            <button id="btnExportImg" disabled>导出调色图</button>
-            <button id="btnShareImg" hidden>保存到照片 / 分享</button>
-            <button id="btnExportCompare" disabled>导出对比图</button>
-            <button id="btnExportWipe" disabled>导出滑动对比动图</button>
-            <button id="btnExportMorph" disabled>导出动画→实景 GIF</button>
-            <button id="btnExportApng" disabled>导出高清动图 APNG（全彩）</button>
-          </div>
-        </div>
-        <input type="file" id="batchFiles" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" multiple hidden />
-        <button id="btnBatchExport" disabled hidden>批量套用当前风格并导出</button>
-        <div class="export-note">在导出面板中预览并选择需要的格式；缩略图即时生成，实际文件按选择后才开始制作。</div>
-        <details class="adv">
-          <summary>更多导出与预设 · 布局 / LUT / 预设</summary>
-          <div class="d-body">
-            <div class="ctrl-group">
-              <label>对比布局</label>
-              <select id="layout">
-                <option value="updown">上下对比（动画 / 实景）</option>
-                <option value="leftright">左右对比</option>
-                <option value="triple">三联（动画 · 原图 · 调色）</option>
-                <option value="postcard">巡礼卡片（此处 · 彼处）</option>
-              </select>
-              <button id="btnExportCompareLayout" class="primary" disabled hidden>按此布局导出对比图</button>
-            </div>
-            <div class="ctrl-group compare-meta">
-              <label>卡片标题与地点（可选）</label>
-              <input id="compareTitle" maxlength="48" placeholder="例如：摇曳露营△ · 伊豆" />
-              <input id="comparePlace" maxlength="80" placeholder="地点；照片含 GPS 时会自动附上坐标" />
-            </div>
-            <button id="btnExportLut" disabled hidden>导出高精度 .cube LUT</button>
-            <div class="export-note">65³ LUT 含影调/色彩/饱和度；不含天空分区与辉光。</div>
-            <div class="ctrl-group preset-box">
-              <label>风格预设（保存在本机）</label>
-              <div class="preset-row">
-                <select id="presetSelect"><option value="">选择预设…</option></select>
-                <button id="btnPresetApply" class="small">应用</button>
-              </div>
-              <div class="preset-row">
-                <input id="presetName" maxlength="30" placeholder="例如：摇曳露营·伊豆" />
-                <button id="btnPresetSave" class="small">保存</button>
-                <button id="btnPresetDelete" class="small" disabled>删除</button>
-              </div>
-              <div class="export-note">当前参数会自动恢复；图片不会写入浏览器存储。</div>
-            </div>
-          </div>
-        </details>
-        <details class="adv model-cache-section">
-          <summary>AI 离线包 · 抠图 / 找图模型下载</summary>
-          <div class="d-body">
-            <div class="model-cache">
-              <div id="modelCacheStatus">正在检查 AI 离线包…</div>
-              <div id="modelCacheHint" class="export-note">基础调色不需要下载 AI 模型。出门前可在 Wi‑Fi 下下载自动抠图离线包。</div>
-              <div id="pwaInstallTip" class="export-note" hidden></div>
-              <button id="btnPwaInstall" class="small" hidden>安装为应用（防止系统清除离线模型）</button>
-              <button id="btnCacheModels" class="small">下载自动抠图离线包（约 85MB）</button>
-              <button id="btnCacheSam" class="small">下载 SAM 高质量兜底包（约 38MB）</button>
-              <button id="btnCacheMatch" class="small">下载找图匹配离线包（约 21MB）</button>
-              <button id="btnTestModelDownload" class="small">检测模型下载线路</button>
-              <div id="modelDownloadProbe" class="download-probe" hidden></div>
-              <button id="btnClearModelCache" class="small">删除 AI 离线包</button>
-              <button id="btnExportDiagnostics" class="small">导出诊断信息（排错用）</button>
-              <div id="deviceStatus" class="export-note"></div>
-            </div>
-          </div>
-        </details>
+    <!-- 操作区：只显示当前阶段需要的东西，每个阶段一个主按钮 -->
+    <section class="dock" id="dock">
+      <div class="pane" data-for="empty">
+        <button id="btnPickAnime" class="primary big">选择动画截图</button>
+        <p class="tip">从 anitabi 地图点「调色」进来会自动带入截图。</p>
       </div>
-    </section>
-    </div><!-- /col-left -->
 
-    <!-- 中：预览区 -->
-    <section class="panel preview">
-      <div class="align-bar" id="alignBar" hidden>
-        <span class="align-tip">拖拽照片对准虚影</span>
-        <label class="mini inline">缩放 <span id="alignZoomVal">100%</span></label>
-        <input type="range" id="alignZoom" min="100" max="300" value="100" />
-        <label class="mini inline">虚影 <span id="alignOpacityVal">50%</span></label>
-        <input type="range" id="alignOpacity" min="15" max="85" value="50" />
-        <button id="btnAlignApply" class="primary small">应用裁剪</button>
-        <button id="btnAlignReset" class="small" hidden>恢复整幅</button>
-        <button id="btnAlignCancel" class="small">取消</button>
+      <div class="pane" data-for="anime">
+        <button id="btnShoot" class="primary big">📷 现场拍摄<small>叠加动画虚影，对准再拍</small></button>
+        <button id="btnPickPhoto" class="big">🖼 选择已有照片</button>
+        <button id="btnMatchPhotos" class="link">🔍 从多张照片里找最像的</button>
       </div>
-      <div class="compare" id="compare">
-        <div class="compare-stack" id="compareStack">
-          <div class="stack-panel" id="stackGradedPanel">
-            <span class="stack-label">调色后</span>
-            <canvas id="canvasGraded"></canvas>
-          </div>
-          <div class="stack-panel" id="stackAnimePanel" hidden>
-            <span class="stack-label">动画截图</span>
-            <canvas id="canvasAnimeStack"></canvas>
-          </div>
-          <canvas id="canvasAnimeOverlay" hidden></canvas>
-        </div>
-        <div class="compare-clip" id="clip">
-          <canvas id="canvasOrig"></canvas>
-        </div>
-        <div class="handle" id="handle"><span></span></div>
-        <img id="alignGhost" alt="" hidden />
-        <div class="badge left" id="badgeLeft">原图</div>
-        <div class="badge right" id="badgeRight">调色后</div>
-        <div class="empty" id="emptyHint">
-          <div class="empty-flow">
-            <b>把动画的色调套到你的实景照片上</b>
-            <span>① 放入动画截图与实景照片（或现场拍摄）</span>
-            <span>② 自动调色，右侧微调强度</span>
-            <span>③ 导出对比图 · 可选把动画角色抠进画面</span>
-          </div>
-        </div>
-      </div>
-      <div class="compare-modes" id="compareModes" hidden>
-        <span>对比方式</span>
-        <button type="button" class="compare-mode on" data-compare-mode="slider">滑动</button>
-        <button type="button" class="compare-mode" data-compare-mode="overlay">叠加</button>
-        <button type="button" class="compare-mode" data-compare-mode="stack">上下</button>
-        <label class="overlay-opacity" id="overlayControls" hidden>动画透明度 <span id="overlayOpacityVal">50%</span><input type="range" id="overlayOpacity" min="0" max="100" value="50" /></label>
-      </div>
-      <div class="char-bar" id="charBar" hidden>
-        <span class="char-bar-label">角色大小</span>
-        <input type="range" id="charScaleQuick" min="20" max="300" value="100" />
-        <span class="char-bar-val" id="charScaleQuickVal">100%</span>
-        <button id="btnCharReset" class="small" title="回到抠图时自动给出的大小和位置">还原</button>
-        <button id="btnCharLock" class="small" title="锁住角色的大小和位置，防止误触">固定</button>
-      </div>
-      <div class="preview-actions">
-        <button id="btnAlign" class="ghost small" disabled>构图对齐</button>
-      </div>
-    </section>
 
-    <div class="col col-right">
-    <!-- 右：调整 -->
-    <section class="panel controls">
-      <!-- 调色 -->
-      <div class="sec">
-        <div class="sec-title">调色</div>
-        <div class="ctrl-group">
-          <label>强度 <span id="strengthVal">85%</span></label>
+      <div class="pane" data-for="photo">
+        <button id="btnPickAnime2" class="primary big">选择动画截图</button>
+        <button id="btnMatchAnimes" class="link">🔍 从多张动画截图里找最像的</button>
+      </div>
+
+      <div class="pane" data-for="ready">
+        <label class="row">
+          <span>调色强度</span><output id="strengthVal">85%</output>
           <input type="range" id="strength" min="0" max="100" value="85" />
-        </div>
-        <div class="ctrl-group">
-          <label>迁移模式</label>
-          <select id="mode">
-            <option value="tone" selected>影调+色彩（推荐）</option>
-            <option value="full">完整迁移（明度+色彩）</option>
-            <option value="chroma">仅色彩（保留实景明度·更自然）</option>
-          </select>
-        </div>
-        <details class="adv">
-          <summary>高级调色 · 天空 / 饱和 / 辉光</summary>
-          <div class="d-body">
-            <label class="check">
-              <input type="checkbox" id="skyRegion" checked />
-              <span>天空分区迁移</span>
+        </label>
+
+        <div class="char-box" id="charBox" hidden>
+          <div class="char-msg" id="charMsg" hidden></div>
+          <div class="char-fail" id="charFail" hidden>
+            <button id="btnCharRetry" class="small">重试</button>
+            <button id="btnCharHires" class="small">加强搜索小角色</button>
+            <button id="btnCharBox" class="small">手动框选</button>
+          </div>
+          <div class="char-chips" id="charChips" hidden></div>
+          <div class="char-ctl" id="charCtl" hidden>
+            <label class="row">
+              <span>角色大小</span><output id="charScaleVal">100%</output>
+              <input type="range" id="charScale" min="20" max="300" value="100" />
             </label>
-            <div class="ctrl-group">
-              <label>饱和度 <span id="satBoostVal">15%</span></label>
-              <input type="range" id="satBoost" min="0" max="50" value="15" />
-            </div>
-            <div class="ctrl-group">
-              <label>辉光 <span id="bloomVal">25%</span></label>
-              <input type="range" id="bloom" min="0" max="60" value="25" />
+            <div class="btn-row">
+              <button id="btnCharReset" class="small">还原位置</button>
+              <button id="btnCharRefine" class="small">修边</button>
+              <button id="btnCharRemove" class="small">移除</button>
             </div>
           </div>
-        </details>
+        </div>
+
+        <div class="tools">
+          <button id="btnRetake" class="tool"><i>📷</i>重拍</button>
+          <button id="btnAlign" class="tool"><i>◫</i>对齐构图</button>
+          <button id="btnAddChar" class="tool"><i>🧍</i>加角色</button>
+          <button id="btnGradeMore" class="tool"><i>⚙</i>微调</button>
+        </div>
+        <div class="save-bar"><button id="btnSave" class="primary big">保存 / 分享</button></div>
       </div>
 
-      <!-- 角色合成：产品的核心玩法，默认展开以便首次使用者发现 -->
-      <details class="sec-d character-section" open>
-        <summary>
-          <span class="character-summary-copy">
-            <span class="character-summary-title">角色合成</span>
-            <span class="character-summary-subtitle">把动画角色抠进你的实景画面</span>
-          </span>
-          <button type="button" id="btnResetCharacter" class="small character-reset" disabled title="清除本次角色抠图、补画、橡皮擦和位置调整；保留已上传的两张图与调色">重置角色合成</button>
-        </summary>
-        <div class="d-body">
-          <div class="extract-box">
-            <div class="extract-row">
-              <button id="btnExtractAI" class="ghost ai" disabled>模型抠像</button>
-              <span id="loadExtractAI" class="button-load" role="status" aria-live="polite" hidden></span>
-              <button type="button" class="info-tip" aria-label="说明" data-tip="AI 模型抠像，效果最好；单次约 15 秒，首次使用需下载约 130MB 模型">i</button>
-            </div>
-            <div class="extract-row">
-              <button id="btnLasso" class="ghost" disabled>圈选抠像</button>
-              <button type="button" class="info-tip" aria-label="说明" data-tip="同属模型抠像：圈出人物所在的位置，帮模型精确定位；多人、远景小人或模型漏检时用">i</button>
-            </div>
-            <div class="extract-row">
-              <button id="btnExtract" class="ghost" disabled>算法抠像</button>
-              <button type="button" class="info-tip" aria-label="说明" data-tip="纯算法抠像：先圈住人物，再对局部秒出；不下载模型，适合网络不佳或模型抠像失败时使用">i</button>
-            </div>
-            <div class="extract-row">
-              <button id="btnEraseMask" class="ghost" disabled>橡皮擦</button>
-              <button type="button" class="info-tip" aria-label="说明" data-tip="打开后仅已识别目标会亮起；在亮起的部分圈选，即可把它重新加回暗蒙版">i</button>
-            </div>
-            <div class="extract-row">
-              <button id="btnMaskUndo" class="ghost" disabled>↩ 撤销上一步</button>
-              <button type="button" class="info-tip" aria-label="说明" data-tip="撤销最近一次补画、点选补块或橡皮擦；可连续撤销到最初，也可在后续用补画覆盖擦除">i</button>
-            </div>
-            <button id="btnExportCharacter" class="ghost" disabled>导出角色透明 PNG</button>
-            <label class="check">
-              <input type="checkbox" id="hiresDet" />
-              <span>远景小人模式（更慢 · 找小角色）</span>
-            </label>
-            <label class="check" id="mobileSamRow" hidden>
-              <input type="checkbox" id="mobileSam" />
-              <span>iPhone/iPad 高质量 SAM（远景更强 · 高内存）</span>
-            </label>
-            <div class="char-chips" id="charChips" hidden></div>
-            <label class="check">
-              <input type="checkbox" id="composite" checked />
-              <span>叠加到实景场景（可拖拽角色）</span>
-            </label>
-            <div class="extract-status" id="extractStatus">先上传动画截图</div>
-            <div class="mask-quality-controls">
-              <strong>抠图细节由你决定</strong>
-              <p>调整立即生效，不会重新调用模型。</p>
-              <label class="mini">保留细节 ← 抠图阈值 <span id="maskThrVal">110</span> → 去背景杂边</label>
-              <input type="range" id="maskThr" min="40" max="200" value="110" />
-              <label class="mini">保留边缘 ← 边缘收紧（去白边）<span id="maskErodeVal">0px</span> → 收紧</label>
-              <input type="range" id="maskErode" min="0" max="10" value="0" />
-              <label class="check"><input type="checkbox" id="maskFilter" checked /><span>去掉与角色分离的小碎点</span></label>
-              <label class="check"><input type="checkbox" id="maskClose" checked /><span>填平角色内部小洞、连接小缺口</span></label>
-            </div>
-            <details class="adv">
-              <summary>角色微调 · 大小 / 光影 / 颗粒</summary>
-              <div class="d-body">
-                <label class="mini">角色大小 <span id="charScaleVal">100%</span>（100% = 与动画同比例）</label>
-                <input type="range" id="charScale" min="20" max="300" value="100" />
-                <label class="mini">光照融合 <span id="harmonizeVal">35%</span></label>
-                <input type="range" id="harmonize" min="0" max="70" value="35" />
-                <label class="mini">落地阴影 <span id="shadowVal">25%</span></label>
-                <input type="range" id="shadow" min="0" max="60" value="25" />
-                <label class="mini">阴影方向 <span id="shadowOffsetVal">0%</span></label>
-                <input type="range" id="shadowOffset" min="-50" max="50" value="0" />
-                <label class="mini">颗粒匹配 <span id="grainVal">12%</span></label>
-                <input type="range" id="grain" min="0" max="40" value="12" />
-              </div>
-            </details>
-          </div>
+      <div class="pane" data-for="align">
+        <p class="tip">拖动照片，对准半透明的动画虚影；双指或滑杆缩放。</p>
+        <label class="row">
+          <span>缩放</span><output id="alignZoomVal">100%</output>
+          <input type="range" id="alignZoom" min="100" max="300" value="100" />
+        </label>
+        <label class="row">
+          <span>虚影</span><output id="alignOpacityVal">50%</output>
+          <input type="range" id="alignOpacity" min="15" max="85" value="50" />
+        </label>
+        <div class="btn-row">
+          <button id="btnAlignCancel">取消</button>
+          <button id="btnAlignReset" hidden>恢复整幅</button>
+          <button id="btnAlignApply" class="primary">完成</button>
         </div>
-      </details>
+      </div>
     </section>
-    <div class="status" id="status">等待上传…</div>
-    </div><!-- /col-right -->
   </main>
-  </div>
 
-  <footer class="site-footer">
-    <div class="site-footer-inner">
-      <div class="footer-credit">
-        <strong>聖地巡礼 · 调色对比生成器</strong>
-        <span>独立开发：LovelySummer Channel</span>
+  <input type="file" id="fileAnime" accept="image/jpeg,image/png,image/webp,.heic,.heif" hidden />
+  <input type="file" id="filePhoto" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" hidden />
+  <input type="file" id="matchFiles" accept="image/jpeg,image/png,image/webp,.heic,.heif,.cr2,.cr3,.nef,.arw,.dng,.orf,.rw2,.raf,.pef,.srw" multiple hidden />
+
+  <!-- 实景照片来源 -->
+  <dialog id="photoSheet" class="sheet">
+    <h2>实景照片</h2>
+    <p class="tip" id="psTip" hidden>先选一张动画截图，才能叠加参考虚影、按截图找照片。</p>
+    <div class="menu-list">
+      <button id="psShoot" class="big primary">📷 现场拍摄<small>叠加动画虚影，对准再拍</small></button>
+      <button id="psPick" class="big">🖼 从相册选择</button>
+      <button id="psMatch" class="big">🔍 从多张照片里找最像的</button>
+    </div>
+    <button class="sheet-close" data-close>取消</button>
+  </dialog>
+
+  <!-- 微调：不常用的调色参数都收在这里 -->
+  <dialog id="gradeSheet" class="sheet sheet-live">
+    <div class="sheet-head">
+      <h2>调色微调</h2>
+      <span class="head-btns"><button id="btnGradeDefault" class="small">恢复默认</button><button data-close class="small primary">完成</button></span>
+    </div>
+    <label class="col">
+      <span>迁移方式</span>
+      <select id="mode">
+        <option value="tone" selected>影调 + 色彩（推荐）</option>
+        <option value="full">完整迁移（明度 + 色彩）</option>
+        <option value="chroma">仅色彩（保留实景明度，更自然）</option>
+      </select>
+    </label>
+    <label class="check"><input type="checkbox" id="skyRegion" checked /><span id="skyLabel">天空单独调色</span></label>
+    <label class="row"><span>饱和度</span><output id="satBoostVal">15%</output><input type="range" id="satBoost" min="0" max="50" value="15" /></label>
+    <label class="row"><span>辉光</span><output id="bloomVal">25%</output><input type="range" id="bloom" min="0" max="60" value="25" /></label>
+  </dialog>
+
+  <!-- 保存 / 分享 -->
+  <dialog id="exportSheet" class="sheet">
+    <div class="sheet-head"><h2>保存 / 分享</h2><button data-close class="small">关闭</button></div>
+    <div class="export-grid">
+      <button class="export-card" data-export="image"><canvas id="pvImage"></canvas><b>调色图</b><span>高清 JPEG</span></button>
+      <button class="export-card" data-export="compare"><canvas id="pvCompare"></canvas><b>对照图</b><span>动画 + 调色后 · 选版式</span></button>
+      <button class="export-card" data-export="gif"><canvas id="pvGif"></canvas><b>动图 GIF</b><span>动画渐变成实景</span></button>
+      <button class="export-card" id="cardCharacter" data-export="character" hidden><canvas id="pvCharacter"></canvas><b>角色透明 PNG</b><span>已抠出的角色</span></button>
+      <button class="export-card text" data-export="lut"><i>LUT</i><b>调色 LUT</b><span>.cube，可用于其他修图软件</span></button>
+    </div>
+  </dialog>
+
+  <!-- 对照图版式 -->
+  <dialog id="layoutSheet" class="sheet">
+    <div class="sheet-head"><h2>对照图版式</h2><button data-close class="small">返回</button></div>
+    <div class="layout-grid" id="layoutGrid">
+      <button class="export-card on" data-layout="updown"><canvas id="pvUpdown"></canvas><b>上下</b></button>
+      <button class="export-card" data-layout="leftright"><canvas id="pvLeftright"></canvas><b>左右</b></button>
+      <button class="export-card" data-layout="triple"><canvas id="pvTriple"></canvas><b>三联</b><span>动画 · 原图 · 调色</span></button>
+      <button class="export-card" data-layout="postcard"><canvas id="pvPostcard"></canvas><b>巡礼卡片</b><span>此处 · 彼处</span></button>
+    </div>
+    <div class="card-text" id="cardText" hidden>
+      <input id="compareTitle" maxlength="48" placeholder="标题，例如：摇曳露营△" />
+      <input id="comparePlace" maxlength="80" placeholder="地点（照片含 GPS 时会自动附上坐标）" />
+    </div>
+    <button id="btnMakeCompare" class="primary big">生成对照图</button>
+  </dialog>
+
+  <!-- 导出结果 -->
+  <dialog id="resultSheet" class="sheet">
+    <div class="sheet-head"><h2 id="resultTitle">正在生成…</h2><button data-close class="small">关闭</button></div>
+    <div class="result-body">
+      <div class="result-wait" id="resultWait">准备中…</div>
+      <img id="resultImg" alt="" hidden />
+    </div>
+    <p class="tip" id="resultInfo"></p>
+    <div class="btn-row" id="resultActions" hidden>
+      <button id="btnShare" class="primary" hidden>分享 / 存到相册</button>
+      <button id="btnDownload">下载文件</button>
+    </div>
+    <p class="tip" id="resultHint" hidden>iPhone 也可以长按图片，选「添加到照片」。</p>
+  </dialog>
+
+  <!-- 找最像的照片 -->
+  <dialog id="matchSheet" class="sheet">
+    <div class="sheet-head"><h2 id="matchTitle">找最像的</h2><button data-close class="small">关闭</button></div>
+    <p class="tip" id="matchInfo"></p>
+    <div class="match-grid" id="matchGrid"></div>
+  </dialog>
+
+  <!-- 通用确认 -->
+  <dialog id="askDialog" class="sheet">
+    <h2 id="askTitle"></h2>
+    <p class="ask-body" id="askBody"></p>
+    <div class="btn-row">
+      <button id="askCancel">取消</button>
+      <button id="askOk" class="primary">继续</button>
+    </div>
+  </dialog>
+
+  <!-- 更多 / 关于 -->
+  <dialog id="menuSheet" class="sheet">
+    <div class="sheet-head"><h2>更多</h2><button data-close class="small">关闭</button></div>
+    <section class="menu-sec">
+      <h3>AI 离线模型</h3>
+      <p class="tip" id="modelStatus">正在检查…</p>
+      <p class="tip">调色和对照图不需要模型；「加角色」「找最像」首次使用才会下载，出门前在 Wi‑Fi 下载好，现场就能离线用。</p>
+      <div class="btn-row">
+        <button id="btnCacheAll" class="small">提前下载全部</button>
+        <button id="btnClearModels" class="small">删除模型</button>
       </div>
-      <p>你上传的图片只在本机浏览器中处理，不会上传到服务器。</p>
-      <nav class="footer-links" aria-label="项目链接">
-        <a href="https://ai.meta.com/resources/models-and-libraries/dinov3-license/" target="_blank" rel="noreferrer">Built with DINOv3</a>
+      <p class="tip" id="pwaTip" hidden></p>
+      <button id="btnPwaInstall" class="small" hidden>安装为应用（防止系统清除离线模型）</button>
+    </section>
+    <section class="menu-sec">
+      <h3>关于</h3>
+      <p class="tip">你的图片只在本机浏览器中处理，不会上传到服务器。独立开发：LovelySummer Channel</p>
+      <nav class="links">
         <a href="https://github.com/catofkili/seichi-grader" target="_blank" rel="noreferrer">GitHub</a>
         <a id="verLink" href="https://github.com/catofkili/seichi-grader/commit/__GIT_SHA__" target="_blank" rel="noreferrer">版本 · __GIT_SHA__</a>
         <a href="mailto:lovelysummerchannel@outlook.com?subject=%E8%81%96%E5%9C%B0%E5%B7%A1%E7%A4%BC%20%E8%B0%83%E8%89%B2%E7%94%9F%E6%88%90%E5%99%A8%20%E5%8F%8D%E9%A6%88">问题反馈</a>
+        <a href="https://ai.meta.com/resources/models-and-libraries/dinov3-license/" target="_blank" rel="noreferrer">Built with DINOv3</a>
       </nav>
-    </div>
-  </footer>
+      <button id="btnDiagnostics" class="small">导出诊断信息（反馈问题时附上）</button>
+    </section>
+  </dialog>
 
-  <div id="lassoModal" class="lasso-modal" hidden>
-    <div class="lasso-head">
-      <div class="lasso-guide" id="lassoGuide">
-        <span><b>第一步 · 圈出识别范围</b>：请将目标完全包含在框内。</span>
-        <span><b>第二步 · 补回漏选部分（可选）</b>：识别后用画笔刷开被蒙版遮住的脸、手或发丝。</span>
-      </div>
-      <span id="lassoTip">拖出一个框住角色的矩形——不必精确贴边</span>
-      <div class="lasso-shapes" id="lassoShapes">
-        <button data-shape="rect" class="small shape-on">▭ 矩形</button>
-        <button data-shape="ellipse" class="small">◯ 圆形</button>
-        <button data-shape="free" class="small">✎ 画笔</button>
-      </div>
-      <div class="lasso-keep">
-        <button type="button" id="btnLassoPick" class="small" hidden>👆 点选补块</button>
-        <button type="button" id="btnLassoFill" class="small" hidden>🧲 磁性描边</button>
-        <button type="button" id="btnLassoFillConfirm" class="small primary" hidden>✓ 锁定此轮廓</button>
-        <button type="button" id="btnLassoKeep" class="small">🖊 补画（刷开蒙版）</button>
-        <button type="button" id="btnLassoUndo" class="small" hidden>↩ 撤销上一步</button>
-        <label id="lassoKeepSize" hidden><span id="lassoBrushSizeLabel">画笔粗细</span> <input id="lassoKeepBrush" type="range" min="4" max="160" value="36" /></label>
-      </div>
-      <div class="lasso-actions">
-        <button id="btnLassoRun" class="primary small" disabled>抠取圈选区域</button>
-        <span id="loadLasso" class="button-load" role="status" aria-live="polite" hidden></span>
-        <button id="btnLassoClear" class="small">重画</button>
-        <button id="btnLassoClose" class="small">关闭</button>
-      </div>
+  <!-- 角色修边（全屏） -->
+  <dialog id="refineDialog" class="full">
+    <div class="rf-top">
+      <button id="rfUndo" class="small">↩ 撤销</button>
+      <span id="rfTip">亮的部分会被保留</span>
+      <button id="rfDone" class="primary small">完成</button>
     </div>
-    <div class="lasso-stage"><canvas id="lassoCanvas"></canvas></div>
-  </div>
-
-  <div id="exportHubModal" class="export-hub" hidden role="dialog" aria-modal="true" aria-labelledby="exportHubTitle">
-    <div class="export-hub-dialog">
-      <div class="export-hub-head">
-        <div><h2 id="exportHubTitle">选择导出方式</h2><p>这是快速缩略预览；选中后才生成完整文件。</p></div>
-        <button id="btnCloseExportHub" class="small" aria-label="关闭导出面板">关闭</button>
+    <div class="rf-stage" id="rfStage"><canvas id="rfCanvas"></canvas></div>
+    <div class="rf-tools">
+      <div class="seg" id="rfTools">
+        <button data-tool="erase" class="on">🧽 擦除多余</button>
+        <button data-tool="keep">🖌 补回缺失</button>
+        <button data-tool="box">▭ 框选找角色</button>
       </div>
-      <div class="export-hub-grid">
-        <button class="export-card" data-export-action="image"><canvas id="hubPreviewImage"></canvas><b>调色图</b><span>高分辨率 JPEG</span></button>
-        <button class="export-card" data-export-action="overlay"><canvas id="hubPreviewOverlay"></canvas><b>叠加对照图</b><span>动画覆盖实景 · 按当前透明度导出 PNG</span></button>
-        <button class="export-card" data-export-action="compare-updown"><canvas id="hubPreviewUpdown"></canvas><b>上下对照图</b><span>动画在上，实景在下 · PNG</span></button>
-        <button class="export-card" data-export-action="compare-leftright"><canvas id="hubPreviewLeftright"></canvas><b>左右对照图</b><span>动画在左，实景在右 · PNG</span></button>
-        <button class="export-card" data-export-action="compare-triple"><canvas id="hubPreviewTriple"></canvas><b>三联对比图</b><span>动画、原图、调色后 · PNG</span></button>
-        <button class="export-card" data-export-action="compare-postcard"><canvas id="hubPreviewPostcard"></canvas><b>巡礼卡片</b><span>此处 / 彼处标题卡 · PNG</span></button>
-        <button class="export-card" data-export-action="compare"><canvas id="hubPreviewCompare"></canvas><b id="hubCompareTitle">当前设置的对比图</b><span>使用下方“更多导出”内的布局设置</span></button>
-        <button class="export-card" data-export-action="wipe"><canvas id="hubPreviewWipe"></canvas><b>滑动对比动图</b><span>4 秒 WebM / MP4</span></button>
-        <button class="export-card" data-export-action="morph"><canvas id="hubPreviewMorph"></canvas><b>动画 → 实景 GIF</b><span>约 2 秒 GIF · 分享兼容</span></button>
-        <button class="export-card export-card-text" data-export-action="apng"><i>HD</i><b>高清动图 APNG</b><span>同内容全彩 · 体积较大</span></button>
-        <button class="export-card" id="hubCharacterCard" data-export-action="character" hidden><canvas id="hubPreviewCharacter"></canvas><b>角色透明 PNG</b><span>已抠出的角色</span></button>
-        <button class="export-card export-card-text" data-export-action="batch"><i>＋</i><b>批量套用</b><span>多张实景照片导出 JPEG</span></button>
-        <button class="export-card export-card-text" data-export-action="lut"><i>LUT</i><b>高精度 LUT</b><span>65³ .cube 文件</span></button>
-      </div>
+      <label class="row"><span id="rfBrushLabel">笔刷大小</span><input type="range" id="rfBrush" min="6" max="120" value="30" /></label>
+      <label class="row"><span>边缘收紧</span><output id="rfErodeVal">0px</output><input type="range" id="rfErode" min="0" max="10" value="0" /></label>
     </div>
-  </div>
-
-  <div id="entryNotice" class="entry-notice" hidden role="dialog" aria-modal="true" aria-labelledby="entryNoticeTitle">
-    <div class="entry-notice-dialog">
-      <div class="entry-notice-head">
-        <span class="entry-notice-badge">公告</span>
-        <h2 id="entryNoticeTitle">使用须知</h2>
-      </div>
-      <ol class="entry-notice-list">
-        <li>模型文件由海外节点分发，内地直连速度不稳定。建议连接代理（日本节点为佳）后再下载。仅使用基础调色功能时无需下载模型。</li>
-        <li>建议将本站安装为应用。安装后已下载的离线模型将持久保留于本机，不受系统定期清理影响，并可从主屏幕启动、离线使用；模型仅需下载一次。</li>
-      </ol>
-      <div id="entryNoticeIosSteps" class="entry-notice-ios" hidden>
-        iPhone 安装：点按 Safari 底部「分享」，选择「添加到主屏幕」。
-      </div>
-      <div class="entry-notice-actions">
-        <button id="btnNoticeInstall" class="small primary" hidden>安装为应用</button>
-        <button id="btnNoticeClose" class="small">我已知悉</button>
-      </div>
-    </div>
-  </div>
+  </dialog>
 
   <script>
     // 部署时由 GitHub Actions 把占位符替换成真实 commit；未注入（本地开发）则降级显示 dev
@@ -453,6 +287,6 @@
       }
     })();
   </script>
-  <script type="module" src="./app.js?v=20260731-blob-export"></script>
+  <script type="module" src="./app.js?v=20260929-redesign"></script>
 </body>
 </html>

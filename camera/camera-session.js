@@ -32,6 +32,7 @@ class CameraSession extends EventTarget {
     const support = checkSupport();
     if (!support.ok) throw new Error(support.reason);
     this.stop(); // 幂等：先清掉旧轨道
+    const gen = this._gen; // stop() 会让代际加一：授权弹窗还没点时用户就关了取景，回来的流要立刻停掉
     this.facing = opts.facing || this.facing;
     this.deviceId = opts.deviceId || null;
 
@@ -51,6 +52,7 @@ class CameraSession extends EventTarget {
         throw this._friendlyError(e);
       }
     }
+    if (gen !== this._gen) { stream.getTracks().forEach((t) => t.stop()); throw new Error('取景已关闭'); }
     this.stream = stream;
     this.track = stream.getVideoTracks()[0];
 
@@ -68,6 +70,7 @@ class CameraSession extends EventTarget {
   }
 
   stop() {
+    this._gen = (this._gen || 0) + 1;
     document.removeEventListener('visibilitychange', this._onVisibility);
     if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
     if (this.video) this.video.srcObject = null;
