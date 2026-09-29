@@ -407,34 +407,72 @@ $('psPick').addEventListener('click', () => { $('photoSheet').close(); choosePho
 $('psMatch').addEventListener('click', () => { $('photoSheet').close(); startMatch(false); });
 
 // 从 anitabi 地图跳转载入：?url=<巡礼点动画截图>，可选 name/bid/pid/g 作展示与预设标识。
+// 只带 bid+pid、没有 url 时，按巡礼点 id 向 anitabi 公开接口查截图地址。
 // 仅接受 https 且 anitabi.cn 域名的图，避免被构造链接载入任意外部图片。
+const isAnitabiImage = (u) => u.protocol === 'https:' && /(^|\.)anitabi\.cn$/i.test(u.hostname);
+
+// 地图里的截图常带 ?plan=h160 之类的缩略图参数：160px 高的图拿来调色、抠像、对齐都太糊。
+// 先试去掉参数的原图，取不到再退回链接原样。
+function anitabiImageCandidates(u) {
+  const out = [];
+  if (u.searchParams.has('plan')) {
+    const full = new URL(u.href);
+    full.searchParams.delete('plan');
+    out.push(full.href);
+  }
+  out.push(u.href);
+  return out;
+}
+
+async function lookupAnitabiPoint(bid, pid) {
+  const resp = await fetch(`https://api.anitabi.cn/bangumi/${encodeURIComponent(bid)}/points/detail?haveImage=true`, { credentials: 'omit' });
+  if (!resp.ok) throw new Error(`anitabi 接口返回 ${resp.status}`);
+  const body = await resp.json();
+  const points = Array.isArray(body) ? body : (body?.points || body?.litePoints || []);
+  const point = points.find((item) => String(item?.id) === String(pid));
+  if (!point?.image) throw new Error('这个巡礼点还没有动画截图');
+  return { url: point.image, name: point.cn || point.name || '' };
+}
+
+let mapLoading = false;
 async function loadFromQuery() {
   const params = new URLSearchParams(location.search);
-  const url = params.get('url');
-  if (!url) return;
-  let u;
-  try { u = new URL(url); } catch { return; }
-  if (u.protocol !== 'https:' || !/(^|\.)anitabi\.cn$/i.test(u.hostname)) {
-    // 只接受 https 的 anitabi.cn 图片（防止被构造链接载入任意外部图片）。但别静默丢掉：
-    // 地图带了别的域名的图时，用户要知道为什么没带过来
-    console.warn('忽略不受信任的跳转图片来源：', url);
-    setStatus(`地图带来的图片地址（${u.hostname}）不在允许范围内，没有自动载入。请手动选择动画截图`, 10000);
-    return;
-  }
-  const name = params.get('name') || '';
+  let url = params.get('url');
+  const bid = params.get('bid') || '', pid = params.get('pid') || '';
+  if ((!url && !(bid && pid)) || mapLoading) return;
+  let name = params.get('name') || '';
+  const animeBefore = state.anime;
+  mapLoading = true;
   try {
     setStatus(name ? `正在载入「${name}」的动画截图…` : '正在载入动画截图…', 0);
-    // 网络抖一下就丢图太可惜：失败后等一会儿再试一次
-    let data;
-    try { data = await urlToImageData(url); }
-    catch { await new Promise((r) => setTimeout(r, 1500)); data = await urlToImageData(url); }
+    if (!url) {
+      const found = await lookupAnitabiPoint(bid, pid);
+      url = found.url;
+      if (!name) name = found.name;
+    }
+    let u;
+    try { u = new URL(url); } catch { throw new Error('截图链接无效'); }
+    // 别静默丢掉：地图带了别的域名的图时，用户要知道为什么没带过来
+    if (!isAnitabiImage(u)) throw new Error(`图片地址（${u.hostname}）不在允许范围内`);
+    let data = null, lastError = null;
+    for (const candidate of anitabiImageCandidates(u)) {
+      try { data = await urlToImageData(candidate); break; } catch (e) { lastError = e; }
+    }
+    if (!data) { // 网络抖一下就丢图太可惜：等一会儿再试一次
+      await new Promise((r) => setTimeout(r, 1500));
+      try { data = await urlToImageData(anitabiImageCandidates(u).pop()); } catch (e) { throw lastError || e; }
+    }
+    // 载入期间用户已经自己放了截图：尊重用户的选择，不覆盖
+    if (state.anime !== animeBefore) { setStatus(''); return; }
     await handleAnimeData(data);
-    state.fromMap = { name, bid: params.get('bid') || '', pid: params.get('pid') || '', g: params.get('g') || '' };
+    state.fromMap = { name, bid, pid, g: params.get('g') || '' };
     setStatus(name ? `已载入「${name}」· 接下来到现场拍摄，或选一张已有照片` : '动画截图已载入 · 接下来拍摄或选一张实景照片', 7000);
   } catch (e) {
-    // 常驻提示，别几秒后就消失：用户得知道图为什么没带过来，并且知道能手动选
+    // 常驻提示：用户得知道图为什么没带过来，并且知道能手动选
     rememberError('load-from-map', e);
-    setStatus('没能自动载入地图上的动画截图（网络或图片服务器问题）。可以点左上「动画截图」手动选一张，或刷新页面重试', 0);
+    setStatus(`没能自动载入地图上的动画截图（${e.message || e}）。可以点左上「动画截图」手动选一张，或刷新页面重试`, 0);
+  } finally {
+    mapLoading = false;
   }
 }
 
@@ -1563,6 +1601,9 @@ $('resultSheet').addEventListener('close', () => {
 });
 
 function showResult({ blob, name, info }) {
+  // 文件名带时间戳：安卓 Chrome 遇到同名文件会弹「文件已存在」，换图后第二次导出等于静默失败
+  const t = new Date(), p2 = (n) => String(n).padStart(2, '0');
+  name = name.replace(/(\.[^.]+)$/, `-${t.getFullYear()}${p2(t.getMonth() + 1)}${p2(t.getDate())}-${p2(t.getHours())}${p2(t.getMinutes())}${p2(t.getSeconds())}$1`);
   if (lastResult?.url) URL.revokeObjectURL(lastResult.url);
   const url = URL.createObjectURL(blob);
   lastResult = { blob, name, url };
