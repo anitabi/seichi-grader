@@ -409,7 +409,9 @@ $('psMatch').addEventListener('click', () => { $('photoSheet').close(); startMat
 // 从 anitabi 地图跳转载入：?url=<巡礼点动画截图>，可选 name/bid/pid/g 作展示与预设标识。
 // 只带 bid+pid、没有 url 时，按巡礼点 id 向 anitabi 公开接口查截图地址。
 // 仅接受 https 且 anitabi.cn 域名的图，避免被构造链接载入任意外部图片。
-const isAnitabiImage = (u) => u.protocol === 'https:' && /(^|\.)anitabi\.cn$/i.test(u.hostname);
+// image-anitabi.magiconch.com 是 anitabi 图片 CDN 的镜像域名：地图会按访客所在的域名把 image.anitabi.cn
+// 换成它，之前不认这个域名，正式站从地图跳转过来就一直是空的。
+const isAnitabiImage = (u) => u.protocol === 'https:' && /(^|\.)anitabi\.cn$|^image-anitabi\.magiconch\.com$/i.test(u.hostname);
 
 // 地图里的截图常带 ?plan=h160 之类的缩略图参数：160px 高的图拿来调色、抠像、对齐都太糊。
 // 先试去掉参数的原图，取不到再退回链接原样。
