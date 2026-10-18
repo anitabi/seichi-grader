@@ -54,6 +54,9 @@ const state = {
   fromMap: null,
 };
 
+let photoFullCache = { url: '', canvas: null };
+let animeLabCache = { anime: null, lab: null, sky: null };
+
 const $ = (id) => document.getElementById(id);
 const HINT_KEY = 'seichi-hint-compare-v1';
 const hasFlag = (k) => { try { return !!localStorage.getItem(k); } catch { return false; } };
@@ -67,6 +70,26 @@ function paintRange(el) {
 }
 const paintRanges = () => document.querySelectorAll('input[type=range]').forEach(paintRange);
 document.addEventListener('input', (e) => { if (e.target.type === 'range') paintRange(e.target); });
+
+function bindRangeNumber(rangeId, numberId) {
+  const range = $(rangeId), number = $(numberId);
+  if (!range || !number) return;
+  const commit = () => {
+    const raw = number.value.trim();
+    let value = raw === '' ? Number(range.value) : Number(raw);
+    if (!Number.isFinite(value)) value = Number(range.value);
+    value = clamp(Math.round(value), Number(range.min), Number(range.max));
+    number.value = value;
+    if (Number(range.value) === value) { paintRange(range); return; }
+    range.value = value;
+    range.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  number.addEventListener('change', commit);
+  number.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); number.blur(); }
+  });
+  range.addEventListener('input', () => { number.value = range.value; });
+}
 
 // 把浏览器/ORT 的英文报错翻成人话：用户能据此决定「换个网络」还是「换张图」
 function friendlyError(e) {
@@ -179,7 +202,16 @@ function getGradeCache() {
   const ignoreSub = SUBTITLE_BAND;
   const photoOpts = { cov: true };
   const animeOpts = { cov: true, ignoreBottomRatio: ignoreSub };
-  const photoLab = imageDataToLab(state.photo.imgData), animeLab = imageDataToLab(state.anime.imgData);
+  const photoLab = imageDataToLab(state.photo.imgData);
+  let animeLab, animeSky;
+  if (animeLabCache.anime === state.anime) {
+    animeLab = animeLabCache.lab;
+    animeSky = animeLabCache.sky;
+  } else {
+    animeLab = imageDataToLab(state.anime.imgData);
+    animeSky = skyMask(state.anime.imgData, { ignoreBottomRatio: ignoreSub });
+    animeLabCache = { anime: state.anime, lab: animeLab, sky: animeSky };
+  }
   const cache = {
     anime: state.anime, photo: state.photo,
     photoLab, animeLab,
@@ -189,7 +221,7 @@ function getGradeCache() {
       map: makeLumaCdfMap(state.photo.imgData, state.anime.imgData, { ignoreBottomRatio: ignoreSub, srcLabData: photoLab, tgtLabData: animeLab }),
     },
     photoSky: skyMask(state.photo.imgData),
-    animeSky: skyMask(state.anime.imgData, { ignoreBottomRatio: ignoreSub }),
+    animeSky,
   };
   if (cache.photoSky.valid && cache.animeSky.valid) {
     const ps = cache.photoSky.weight, as = cache.animeSky.weight;
@@ -285,10 +317,11 @@ function animeCover(w, h) {
 
 // 滑块左侧的对照层：原图或动画截图（点左上角标签切换）
 function drawLeftLayer() {
-  const g = $('canvasGraded'), o = $('canvasOrig');
+  const o = $('canvasOrig');
   if (state.left === 'anime') {
-    o.width = g.width; o.height = g.height;
-    o.getContext('2d').drawImage(animeCover(g.width, g.height), 0, 0);
+    const a = state.anime.canvas;
+    o.width = a.width; o.height = a.height;
+    o.getContext('2d').drawImage(a, 0, 0);
   } else {
     drawToCanvas(o, state.photo.imgData);
   }
@@ -306,11 +339,16 @@ function syncCanvasSize() {
   const box = $('compare'), g = $('canvasGraded');
   const cw = box.clientWidth, ch = box.clientHeight, iw = g.width, ih = g.height;
   if (!cw || !ch || !iw || !ih) return;
-  const scale = Math.min(cw / iw, ch / ih);
-  const w = iw * scale, h = ih * scale;
-  for (const c of [g, $('canvasOrig'), $('alignGhost')]) {
-    c.style.width = w + 'px';
-    c.style.height = h + 'px';
+  const fit = (w, h) => {
+    if (!w || !h) return null;
+    const scale = Math.min(cw / w, ch / h);
+    return [w * scale, h * scale];
+  };
+  const main = fit(iw, ih);
+  const left = $('canvasOrig'), leftSize = fit(left.width, left.height) || main;
+  for (const [c, size] of [[g, main], [left, leftSize], [$('alignGhost'), main]]) {
+    c.style.width = size[0] + 'px';
+    c.style.height = size[1] + 'px';
   }
 }
 new ResizeObserver(syncCanvasSize).observe($('compare'));
@@ -348,6 +386,7 @@ async function handleAnimeData(data) {
 
 async function handlePhotoData(data) {
   if (state.photo?.srcUrl?.startsWith('blob:')) URL.revokeObjectURL(state.photo.srcUrl);
+  photoFullCache = { url: '', canvas: null };
   state.photo = {
     imgData: data.imgData, width: data.width, height: data.height, srcUrl: data.url, align: null,
     originalWidth: data.originalWidth || data.width, originalHeight: data.originalHeight || data.height,
@@ -481,7 +520,8 @@ async function loadFromQuery() {
 // ---------- 调色控件 ----------
 const GRADE_LABELS = { strength: 'strengthVal', satBoost: 'satBoostVal', bloom: 'bloomVal' };
 for (const [id, label] of Object.entries(GRADE_LABELS)) {
-  $(id).addEventListener('input', (e) => { $(label).textContent = e.target.value + '%'; scheduleRecompute(); });
+  $(id).addEventListener('input', scheduleRecompute);
+  bindRangeNumber(id, label);
 }
 $('mode').addEventListener('change', recompute);
 $('skyRegion').addEventListener('change', recompute);
@@ -577,11 +617,12 @@ function compositeCharacter(canvas, record = true) {
 function setCharScale(value) {
   const v = clamp(Math.round(Number(value) || 100), 20, 300);
   $('charScale').value = v;
+  $('charScaleVal').value = v;
   paintRange($('charScale'));
-  $('charScaleVal').textContent = v + '%';
   redrawComposite();
 }
 $('charScale').addEventListener('input', (e) => setCharScale(e.target.value));
+bindRangeNumber('charScale', 'charScaleVal');
 
 // 还原：回到抠图时自动给出的大小（100% = 与动画同比例）和动画原位
 $('btnCharReset').addEventListener('click', () => {
@@ -617,7 +658,7 @@ function clearCharacter() {
   state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 };
   invalidateHarmonize();
   setCharSeg(null);
-  $('charScale').value = 100; $('charScaleVal').textContent = '100%'; paintRange($('charScale'));
+  $('charScale').value = 100; $('charScaleVal').value = 100; paintRange($('charScale'));
   updateCharUI({});
   redrawComposite();
 }
@@ -661,12 +702,26 @@ function applyRefine(resetPos) {
   if (!state.rawAlpha || !state.anime) return;
   const w = state.rawW, h = state.rawH;
   const clean = cleanupAlpha(state.rawAlpha, w, h, { thr: CUTOUT_THR, erode: state.erode, featherR: 2, filter: true, close: true });
-  // 手工修补层（补回/擦除的时间序重放结果）盖在算法输出之上
-  if (state.opsOverlay?.length === clean.length) {
-    const ov = state.opsOverlay;
+  // 手工修补层：补回区域也走边缘收紧，擦除最后覆盖
+  const ov = state.opsOverlay?.length === clean.length ? state.opsOverlay : null;
+  if (ov) {
+    let keep = null;
+    for (let i = 0; i < ov.length; i++) {
+      if (ov[i] === 1) {
+        if (!keep) keep = new Uint8ClampedArray(clean.length);
+        keep[i] = 255;
+      }
+    }
+    if (keep) {
+      const keepClean = state.erode > 0
+        ? cleanupAlpha(keep, w, h, { thr: 110, erode: state.erode, featherR: 0, filter: false, close: false })
+        : keep;
+      for (let i = 0; i < clean.length; i++) {
+        if (keepClean[i] > clean[i]) clean[i] = keepClean[i];
+      }
+    }
     for (let i = 0; i < clean.length; i++) {
-      if (ov[i] === 1) clean[i] = 255;
-      else if (ov[i] === 2) clean[i] = 0;
+      if (ov[i] === 2) clean[i] = 0;
     }
   }
   state.finalAlpha = clean;
@@ -856,18 +911,97 @@ function undoMaskOp() {
   rfRefresh();
 }
 
+const MASK_COLOR_KEY = 'seichi-mask-color-v1';
+const MASK_COLOR_DEFAULT = '#000000';
+const BRUSH_COLOR_KEY = 'seichi-brush-color-v1';
+
+function maskColorHex(value) {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : null;
+}
+
+function loadMaskColor() {
+  try { return maskColorHex(localStorage.getItem(MASK_COLOR_KEY)) || MASK_COLOR_DEFAULT; } catch { return MASK_COLOR_DEFAULT; }
+}
+
+function loadBrushColor() {
+  try { return maskColorHex(localStorage.getItem(BRUSH_COLOR_KEY)); } catch { return null; }
+}
+
+function maskColorRgb(hex) {
+  const v = parseInt(hex.slice(1), 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+function maskIsLight(hex) {
+  const [r, g, b] = maskColorRgb(hex).map((value) => {
+    const c = value / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.65;
+}
+
 const rf = {
   tool: 'erase', brush: 30, view: { s: 1, x: 0, y: 0 }, base: { w: 0, h: 0 },
   overlay: null, stroke: null, box: null, pointers: new Map(), gesture: null,
+  maskColor: loadMaskColor(), brushColor: loadBrushColor(),
 };
+
+function brushColor() {
+  if (rf.brushColor) return rf.brushColor;
+  return maskIsLight(rf.maskColor) ? '#ff3b30' : '#ffffff';
+}
+
+function syncBrushColorUI() {
+  const picker = $('rfBrushColor');
+  if (!picker) return;
+  const color = brushColor();
+  picker.value = color;
+  const swatch = picker.closest('.brush-color');
+  if (swatch) swatch.style.setProperty('--brush', color);
+  const auto = $('rfBrushAuto');
+  if (auto) {
+    const on = !rf.brushColor;
+    auto.classList.toggle('on', on);
+    auto.setAttribute('aria-pressed', String(on));
+  }
+}
+
+function syncMaskColorUI() {
+  const box = $('rfColors');
+  if (!box) return;
+  const buttons = [...box.querySelectorAll('button[data-color]')];
+  const picked = buttons.find((b) => b.dataset.color === rf.maskColor);
+  for (const b of buttons) {
+    const on = b === picked;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  }
+  const custom = box.querySelector('.swatch.custom');
+  if (custom) custom.classList.toggle('on', !picked);
+  const picker = $('rfMaskColor');
+  if (picker) picker.value = rf.maskColor;
+}
+
+function setMaskColor(color) {
+  rf.maskColor = maskColorHex(color) || MASK_COLOR_DEFAULT;
+  try { localStorage.setItem(MASK_COLOR_KEY, rf.maskColor); } catch {}
+  syncMaskColorUI();
+  syncBrushColorUI();
+  rfBuildOverlay();
+  rfDraw();
+}
 
 function rfBuildOverlay() {
   const src = state.finalAlpha;
   if (!src || src.length !== state.rawW * state.rawH) { rf.overlay = null; return; }
   const overlay = document.createElement('canvas'); overlay.width = state.rawW; overlay.height = state.rawH;
   const image = new ImageData(overlay.width, overlay.height);
-  // 识别目标保持完整；其它部分以深色半透明蒙版呈现，一眼看出漏了哪里
-  for (let i = 0, p = 3; i < src.length; i++, p += 4) image.data[p] = Math.round((255 - src[i]) * .72);
+  const [r, g, b] = maskColorRgb(rf.maskColor);
+  // 识别目标保持完整；其它部分以选定的半透明颜色呈现，一眼看出漏了哪里
+  for (let i = 0, p = 3; i < src.length; i++, p += 4) {
+    image.data[p - 3] = r; image.data[p - 2] = g; image.data[p - 1] = b;
+    image.data[p] = Math.round((255 - src[i]) * .72);
+  }
   overlay.getContext('2d').putImageData(image, 0, 0);
   rf.overlay = overlay;
 }
@@ -878,8 +1012,8 @@ function rfDraw() {
   if (rf.overlay) ctx.drawImage(rf.overlay, 0, 0);
   if (rf.stroke) {
     ctx.save();
-    ctx.globalAlpha = rf.tool === 'erase' ? .7 : .55;
-    ctx.strokeStyle = ctx.fillStyle = rf.tool === 'erase' ? '#000' : '#fff';
+    ctx.globalAlpha = .65;
+    ctx.strokeStyle = ctx.fillStyle = brushColor();
     ctx.lineCap = ctx.lineJoin = 'round'; ctx.lineWidth = rf.stroke.width;
     const pts = rf.stroke.pts;
     ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
@@ -914,8 +1048,8 @@ function rfApplyView() {
 }
 
 const RF_TIPS = {
-  erase: '把手指划过多余的部分，亮的部分会被擦掉',
-  keep: '把手指划过缺失的部分，暗的部分会被补回',
+  erase: '把手指划过多余的部分，没有遮罩颜色的部分会被擦掉',
+  keep: '把手指划过缺失的部分，有遮罩颜色的部分会被补回',
   box: '在角色周围拖出一个框，AI 会在框里再找一遍',
 };
 
@@ -927,6 +1061,7 @@ function rfSetTool(tool) {
   $('rfTip').textContent = RF_TIPS[tool];
   $('rfBrushLabel').textContent = tool === 'box' ? '（框选不需要笔刷）' : '笔刷大小';
   $('rfBrush').disabled = tool === 'box';
+  syncBrushColorUI();
   rfDraw();
 }
 
@@ -944,12 +1079,32 @@ function openRefine(tool = 'erase') {
   rf.view = { s: 1, x: 0, y: 0 };
   rfApplyView();
   $('rfErode').value = state.erode; $('rfErodeVal').textContent = state.erode + 'px'; paintRange($('rfErode'));
+  syncMaskColorUI();
   rfBuildOverlay();
   rfSetTool(tool);
   $('rfUndo').disabled = !state.maskOps.length;
 }
 
 $('rfTools').addEventListener('click', (e) => { const b = e.target.closest('button[data-tool]'); if (b) rfSetTool(b.dataset.tool); });
+$('rfColors').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-color]');
+  if (b) setMaskColor(b.dataset.color);
+});
+$('rfMaskColor').addEventListener('input', (e) => setMaskColor(e.target.value));
+$('rfBrushColor').addEventListener('input', (e) => {
+  const color = maskColorHex(e.target.value);
+  if (!color) return;
+  rf.brushColor = color;
+  try { localStorage.setItem(BRUSH_COLOR_KEY, color); } catch {}
+  syncBrushColorUI();
+  rfDraw();
+});
+$('rfBrushAuto').addEventListener('click', () => {
+  rf.brushColor = null;
+  try { localStorage.removeItem(BRUSH_COLOR_KEY); } catch {}
+  syncBrushColorUI();
+  rfDraw();
+});
 $('rfBrush').addEventListener('input', (e) => { rf.brush = Number(e.target.value); });
 $('rfUndo').addEventListener('click', undoMaskOp);
 $('rfDone').addEventListener('click', () => $('refineDialog').close());
@@ -1025,7 +1180,7 @@ $('refineDialog').addEventListener('close', () => { rf.stroke = null; rf.box = n
       if (rf.tool === 'erase') {
         const idx = selectedIndicesInStroke(stroke);
         if (idx.length) pushMaskOp({ type: 'erase', idx });
-        else $('rfTip').textContent = '这一笔没有碰到角色。亮的部分才会被擦掉';
+        else $('rfTip').textContent = '这一笔没有碰到角色。没有遮罩颜色的部分才会被擦掉';
       } else {
         pushMaskOp({ type: 'keep', stroke });
       }
@@ -1090,6 +1245,9 @@ async function runRegion(box) {
 const alignState = {
   active: false,
   bitmap: null,          // 原始照片全画幅的处理分辨率副本（canvas）
+  source: null,          // 本次对齐会话缓存的原始图片，避免完成/恢复时重复解码
+  sourceUrl: '',
+  busy: false,
   bw: 0, bh: 0,          // bitmap 尺寸
   crop: { cx: 0.5, cy: 0.5, scale: 1 }, // scale = 裁剪宽 / 照片宽
   maxScale: 1,
@@ -1125,9 +1283,15 @@ function drawAlignPreview() {
 // 把原始照片（可选：按归一化裁剪框）按 MAX_DIM 缩成 canvas。
 // 对齐/裁剪/还原都从原图重取，可反复调整、不叠加损耗
 async function loadPhotoBitmap(norm = null) {
-  const img = new Image();
-  img.src = state.photo.srcUrl;
-  await imageReady(img);
+  if (!norm && photoFullCache.url === state.photo.srcUrl && photoFullCache.canvas) return photoFullCache.canvas;
+  if (!alignState.source || alignState.sourceUrl !== state.photo.srcUrl) {
+    const img = new Image();
+    img.src = state.photo.srcUrl;
+    await imageReady(img);
+    alignState.source = img;
+    alignState.sourceUrl = state.photo.srcUrl;
+  }
+  const img = alignState.source;
   const nw = img.naturalWidth, nh = img.naturalHeight;
   const sx = norm ? norm.x * nw : 0, sy = norm ? norm.y * nh : 0;
   const sw = norm ? norm.w * nw : nw, sh = norm ? norm.h * nh : nh;
@@ -1135,6 +1299,7 @@ async function loadPhotoBitmap(norm = null) {
   const c = document.createElement('canvas');
   c.width = Math.round(sw * sc); c.height = Math.round(sh * sc);
   c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  if (!norm) photoFullCache = { url: state.photo.srcUrl, canvas: c };
   return c;
 }
 
@@ -1171,6 +1336,8 @@ function exitAlignMode(redraw = true) {
   if (!alignState.active) return;
   alignState.active = false;
   alignState.bitmap = null;
+  alignState.source = null;
+  alignState.sourceUrl = '';
   $('compare').classList.remove('align-on');
   $('alignGhost').hidden = true;
   updateUI();
@@ -1188,7 +1355,8 @@ async function applyAlignCrop() {
 
 // 恢复整幅照片
 async function resetAlignCrop() {
-  await replacePhotoPixels(await loadPhotoBitmap(), null);
+  if (!alignState.bitmap) return;
+  await replacePhotoPixels(alignState.bitmap, null);
   setStatus('已恢复整幅照片');
 }
 
@@ -1198,16 +1366,29 @@ async function replacePhotoPixels(canvas, align) {
   state.photo.align = align;
   state.gradeCache = null;
   invalidateHarmonize();
-  exitAlignMode(false);
-  updateUI();
+  if (alignState.active) exitAlignMode(false); else updateUI();
+  setStatus('正在重新调色…', 0);
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   recompute();
 }
 
 // 对齐要从原图重取像素，可能失败（原图读不出、手机内存不够）：必须给出提示，别让常驻状态条卡在「应用构图…」
+function setAlignBusy(on) {
+  for (const id of ['btnAlign', 'btnAlignApply', 'btnAlignCancel', 'btnAlignReset']) {
+    const el = $(id);
+    if (el) el.disabled = on;
+  }
+}
 const guardAlign = (fn) => async () => {
+  if (alignState.busy) return;
+  alignState.busy = true;
+  setAlignBusy(true);
   try { await fn(); } catch (e) {
     console.error(e); rememberError('align', e);
     setStatus('构图失败：' + friendlyError(e), 8000);
+  } finally {
+    alignState.busy = false;
+    setAlignBusy(false);
   }
 };
 $('btnAlign').addEventListener('click', guardAlign(enterAlignMode));
@@ -1832,7 +2013,7 @@ function applySettings(saved) {
     if ($(id).type === 'checkbox') $(id).checked = Boolean(saved.values[id]);
     else $(id).value = String(saved.values[id]);
   }
-  for (const [id, label] of Object.entries(GRADE_LABELS)) $(label).textContent = $(id).value + '%';
+  for (const [id, label] of Object.entries(GRADE_LABELS)) $(label).value = $(id).value;
   paintRanges();
   if (state.anime && state.photo) recompute();
 }

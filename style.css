@@ -106,7 +106,21 @@ input[type=range]:disabled { opacity: .4; }
 .row { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: center; }
 .row > input[type=range] { grid-column: 1 / -1; }
 .row > span { font-size: 14px; font-weight: 600; }
+.row > label { font-size: 14px; font-weight: 600; }
 .row > output { font-size: 14px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.num { display: inline-flex; align-items: center; gap: 2px; font-size: 14px; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.num input {
+  width: 2.4em; min-width: 0; min-height: 32px; padding: 0 3px; border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: inherit; font: inherit; text-align: right;
+  -moz-appearance: textfield;
+}
+@supports (field-sizing: content) {
+  .num input { width: auto; field-sizing: content; min-width: 2em; max-width: 4.5em; }
+}
+.num input::-webkit-outer-spin-button, .num input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.num input:hover { border-color: var(--line-strong); }
+.num input:focus { border-color: var(--accent); outline: 2px solid var(--accent-soft); background: var(--bg); }
+.num i { font-style: normal; }
 .col { display: flex; flex-direction: column; gap: 8px; }
 .col > span { font-size: 14px; font-weight: 600; }
 .btn-row { display: flex; gap: 8px; }
@@ -165,6 +179,7 @@ input[type=range]:disabled { opacity: .4; }
 .compare-clip {
   position: absolute; inset: 0; overflow: hidden; display: grid; place-items: center;
   clip-path: inset(0 50% 0 0);
+  background: var(--surface);
 }
 .handle {
   position: absolute; top: 0; bottom: 0; left: 50%; width: 3px; margin-left: -1px;
@@ -370,6 +385,48 @@ dialog.full[open] { display: flex; flex-direction: column; }
 .seg button { padding: 0 6px; min-height: 44px; font-size: 13px; border: 0; background: transparent; box-shadow: none; border-radius: 12px; color: var(--muted); }
 .seg button.on { background: var(--bg); color: var(--accent); box-shadow: var(--shadow-sm); }
 .seg button:disabled { opacity: .35; }
+
+.rf-colors { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rf-colors > span { flex: none; font-size: 13px; font-weight: 600; color: var(--muted); }
+.swatches { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.swatch {
+  position: relative; flex: none; width: 26px; height: 26px; min-height: 0; padding: 0;
+  border-radius: 50%; border: 2px solid var(--bg); background: var(--c, #888);
+  box-shadow: inset 0 0 0 1px rgba(13, 27, 38, .22), 0 0 0 1.5px rgba(13, 27, 38, .45); cursor: pointer;
+}
+button.swatch:hover:not(:disabled), button.swatch:active:not(:disabled) { background: var(--c); transform: none; }
+.swatch.on { border-color: var(--text); box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+.swatch.custom {
+  border-style: dashed; border-color: var(--line-strong);
+  background: conic-gradient(#ff2d6f, #ffb300, #23c96b, #6a5cff, #ff2d6f);
+}
+.swatch.custom.on { border-color: var(--text); }
+.swatch.custom::after {
+  content: '+'; position: absolute; inset: 0; display: grid; place-items: center;
+  color: #fff; font-size: 15px; font-weight: 700; text-shadow: 0 1px 2px rgba(0, 0, 0, .6);
+  pointer-events: none;
+}
+.swatch.custom input[type=color] {
+  position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0;
+  opacity: 0; cursor: pointer;
+}
+
+.rf-brush-color { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rf-brush-color > span { flex: none; font-size: 13px; font-weight: 600; color: var(--muted); }
+.brush-color {
+  position: relative; flex: none; width: 30px; height: 30px; border-radius: 50%;
+  border: 2px solid var(--bg); background: var(--brush, #fff);
+  box-shadow: inset 0 0 0 1px rgba(13, 27, 38, .22), 0 0 0 1.5px rgba(13, 27, 38, .45); cursor: pointer;
+}
+.brush-color input[type=color] {
+  position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0;
+  opacity: 0; cursor: pointer;
+}
+button.rf-auto {
+  min-height: 30px; height: 30px; padding: 0 12px; font-size: 12px; border-radius: 15px; color: var(--muted);
+}
+button.rf-auto.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+button.rf-auto.on:hover:not(:disabled), button.rf-auto.on:active:not(:disabled) { background: var(--accent-soft); }
 
 /* ---------- 横屏 / 平板 / 桌面：预览在左，操作区在右 ---------- */
 @media (min-aspect-ratio: 1/1) and (min-width: 640px) {

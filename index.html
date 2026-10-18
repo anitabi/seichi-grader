@@ -17,7 +17,7 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./icon-180.png" />
-  <link rel="stylesheet" href="./style.css?v=20260930-foot" />
+  <link rel="stylesheet" href="./style.css?v=20261018-inputs4" />
 </head>
 <body>
   <!-- 线条图标：统一粗细和圆角，比各平台不一致的 emoji 更干净 -->
@@ -102,10 +102,11 @@
       </div>
 
       <div class="pane" data-for="ready">
-        <label class="row">
-          <span>调色强度</span><output id="strengthVal">85%</output>
+        <div class="row">
+          <label for="strength">调色强度</label>
+          <span class="num"><input type="number" id="strengthVal" min="0" max="100" step="1" value="85" inputmode="numeric" aria-label="调色强度数值" /><i>%</i></span>
           <input type="range" id="strength" min="0" max="100" value="85" />
-        </label>
+        </div>
 
         <div class="char-box" id="charBox" hidden>
           <div class="char-msg" id="charMsg" hidden></div>
@@ -116,10 +117,11 @@
           </div>
           <div class="char-chips" id="charChips" hidden></div>
           <div class="char-ctl" id="charCtl" hidden>
-            <label class="row">
-              <span>角色大小</span><output id="charScaleVal">100%</output>
+            <div class="row">
+              <label for="charScale">角色大小</label>
+              <span class="num"><input type="number" id="charScaleVal" min="20" max="300" step="1" value="100" inputmode="numeric" aria-label="角色大小数值" /><i>%</i></span>
               <input type="range" id="charScale" min="20" max="300" value="100" />
-            </label>
+            </div>
             <div class="btn-row">
               <button id="btnCharReset" class="small"><svg class="ic sm"><use href="#i-reset"/></svg>还原位置</button>
               <button id="btnCharRefine" class="small"><svg class="ic sm"><use href="#i-brush"/></svg>修边</button>
@@ -189,8 +191,8 @@
       </select>
     </label>
     <label class="check"><input type="checkbox" id="skyRegion" checked /><span id="skyLabel">天空单独调色</span></label>
-    <label class="row"><span>饱和度</span><output id="satBoostVal">15%</output><input type="range" id="satBoost" min="0" max="50" value="15" /></label>
-    <label class="row"><span>辉光</span><output id="bloomVal">25%</output><input type="range" id="bloom" min="0" max="60" value="25" /></label>
+    <div class="row"><label for="satBoost">饱和度</label><span class="num"><input type="number" id="satBoostVal" min="0" max="50" step="1" value="15" inputmode="numeric" aria-label="饱和度数值" /><i>%</i></span><input type="range" id="satBoost" min="0" max="50" value="15" /></div>
+    <div class="row"><label for="bloom">辉光</label><span class="num"><input type="number" id="bloomVal" min="0" max="60" step="1" value="25" inputmode="numeric" aria-label="辉光数值" /><i>%</i></span><input type="range" id="bloom" min="0" max="60" value="25" /></div>
   </dialog>
 
   <!-- 保存 / 分享 -->
@@ -294,6 +296,27 @@
         <button data-tool="keep"><svg class="ic"><use href="#i-brush"/></svg><span>补回缺失</span></button>
         <button data-tool="box"><svg class="ic"><use href="#i-box"/></svg><span>框选找角色</span></button>
       </div>
+      <div class="rf-colors">
+        <span>遮罩颜色</span>
+        <div class="swatches" id="rfColors">
+          <button type="button" class="swatch" data-color="#ff2d6f" style="--c:#ff2d6f" title="玫红" aria-label="玫红" aria-pressed="false"></button>
+          <button type="button" class="swatch" data-color="#ffb300" style="--c:#ffb300" title="黄橙" aria-label="黄橙" aria-pressed="false"></button>
+          <button type="button" class="swatch" data-color="#23c96b" style="--c:#23c96b" title="绿色" aria-label="绿色" aria-pressed="false"></button>
+          <button type="button" class="swatch" data-color="#6a5cff" style="--c:#6a5cff" title="蓝紫" aria-label="蓝紫" aria-pressed="false"></button>
+          <button type="button" class="swatch on" data-color="#000000" style="--c:#000000" title="黑色" aria-label="黑色" aria-pressed="true"></button>
+          <button type="button" class="swatch" data-color="#ffffff" style="--c:#ffffff" title="白色" aria-label="白色" aria-pressed="false"></button>
+          <label class="swatch custom" title="自定义颜色">
+            <input type="color" id="rfMaskColor" value="#000000" aria-label="自定义遮罩颜色" />
+          </label>
+        </div>
+      </div>
+      <div class="rf-brush-color">
+        <span>画笔颜色</span>
+        <label class="brush-color" title="自定义画笔颜色">
+          <input type="color" id="rfBrushColor" value="#000000" aria-label="自定义画笔颜色" />
+        </label>
+        <button type="button" id="rfBrushAuto" class="rf-auto on" aria-pressed="true">自动</button>
+      </div>
       <label class="row"><span id="rfBrushLabel">笔刷大小</span><input type="range" id="rfBrush" min="6" max="120" value="30" /></label>
       <label class="row"><span>边缘收紧</span><output id="rfErodeVal">0px</output><input type="range" id="rfErode" min="0" max="10" value="0" /></label>
     </div>
@@ -310,6 +333,6 @@
       }
     })();
   </script>
-  <script type="module" src="./app.js?v=20261018-lr"></script>
+  <script type="module" src="./app.js?v=20261018-inputs4"></script>
 </body>
 </html>
