@@ -17,7 +17,7 @@
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./icon-180.png" />
-  <link rel="stylesheet" href="./style.css?v=20260930-foot" />
+  <link rel="stylesheet" href="./style.css?v=20261018-refine2" />
 </head>
 <body>
   <!-- 线条图标：统一粗细和圆角，比各平台不一致的 emoji 更干净 -->
@@ -294,6 +294,27 @@
         <button data-tool="keep"><svg class="ic"><use href="#i-brush"/></svg><span>补回缺失</span></button>
         <button data-tool="box"><svg class="ic"><use href="#i-box"/></svg><span>框选找角色</span></button>
       </div>
+      <div class="rf-colors">
+        <span>遮罩颜色</span>
+        <div class="swatches" id="rfColors">
+          <button type="button" class="swatch" data-color="#ff2d6f" style="--c:#ff2d6f" title="玫红" aria-label="玫红" aria-pressed="false"></button>
+          <button type="button" class="swatch" data-color="#ffb300" style="--c:#ffb300" title="黄橙" aria-label="黄橙" aria-pressed="false"></button>
+          <button type="button" class="swatch" data-color="#23c96b" style="--c:#23c96b" title="绿色" aria-label="绿色" aria-pressed="false"></button>
+          <button type="button" class="swatch" data-color="#6a5cff" style="--c:#6a5cff" title="蓝紫" aria-label="蓝紫" aria-pressed="false"></button>
+          <button type="button" class="swatch on" data-color="#000000" style="--c:#000000" title="黑色" aria-label="黑色" aria-pressed="true"></button>
+          <button type="button" class="swatch" data-color="#ffffff" style="--c:#ffffff" title="白色" aria-label="白色" aria-pressed="false"></button>
+          <label class="swatch custom" title="自定义颜色">
+            <input type="color" id="rfMaskColor" value="#000000" aria-label="自定义遮罩颜色" />
+          </label>
+        </div>
+      </div>
+      <div class="rf-brush-color">
+        <span>画笔颜色</span>
+        <label class="brush-color" title="自定义画笔颜色">
+          <input type="color" id="rfBrushColor" value="#000000" aria-label="自定义画笔颜色" />
+        </label>
+        <button type="button" id="rfBrushAuto" class="rf-auto on" aria-pressed="true">自动</button>
+      </div>
       <label class="row"><span id="rfBrushLabel">笔刷大小</span><input type="range" id="rfBrush" min="6" max="120" value="30" /></label>
       <label class="row"><span>边缘收紧</span><output id="rfErodeVal">0px</output><input type="range" id="rfErode" min="0" max="10" value="0" /></label>
     </div>
@@ -310,6 +331,6 @@
       }
     })();
   </script>
-  <script type="module" src="./app.js?v=20261018-lr"></script>
+  <script type="module" src="./app.js?v=20261018-refine3"></script>
 </body>
 </html>

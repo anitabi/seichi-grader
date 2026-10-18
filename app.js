@@ -667,12 +667,26 @@ function applyRefine(resetPos) {
   if (!state.rawAlpha || !state.anime) return;
   const w = state.rawW, h = state.rawH;
   const clean = cleanupAlpha(state.rawAlpha, w, h, { thr: CUTOUT_THR, erode: state.erode, featherR: 2, filter: true, close: true });
-  // 手工修补层（补回/擦除的时间序重放结果）盖在算法输出之上
-  if (state.opsOverlay?.length === clean.length) {
-    const ov = state.opsOverlay;
+  // 手工修补层：补回区域也走边缘收紧，擦除最后覆盖
+  const ov = state.opsOverlay?.length === clean.length ? state.opsOverlay : null;
+  if (ov) {
+    let keep = null;
+    for (let i = 0; i < ov.length; i++) {
+      if (ov[i] === 1) {
+        if (!keep) keep = new Uint8ClampedArray(clean.length);
+        keep[i] = 255;
+      }
+    }
+    if (keep) {
+      const keepClean = state.erode > 0
+        ? cleanupAlpha(keep, w, h, { thr: 110, erode: state.erode, featherR: 0, filter: false, close: false })
+        : keep;
+      for (let i = 0; i < clean.length; i++) {
+        if (keepClean[i] > clean[i]) clean[i] = keepClean[i];
+      }
+    }
     for (let i = 0; i < clean.length; i++) {
-      if (ov[i] === 1) clean[i] = 255;
-      else if (ov[i] === 2) clean[i] = 0;
+      if (ov[i] === 2) clean[i] = 0;
     }
   }
   state.finalAlpha = clean;
@@ -862,18 +876,97 @@ function undoMaskOp() {
   rfRefresh();
 }
 
+const MASK_COLOR_KEY = 'seichi-mask-color-v1';
+const MASK_COLOR_DEFAULT = '#000000';
+const BRUSH_COLOR_KEY = 'seichi-brush-color-v1';
+
+function maskColorHex(value) {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : null;
+}
+
+function loadMaskColor() {
+  try { return maskColorHex(localStorage.getItem(MASK_COLOR_KEY)) || MASK_COLOR_DEFAULT; } catch { return MASK_COLOR_DEFAULT; }
+}
+
+function loadBrushColor() {
+  try { return maskColorHex(localStorage.getItem(BRUSH_COLOR_KEY)); } catch { return null; }
+}
+
+function maskColorRgb(hex) {
+  const v = parseInt(hex.slice(1), 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+}
+
+function maskIsLight(hex) {
+  const [r, g, b] = maskColorRgb(hex).map((value) => {
+    const c = value / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.65;
+}
+
 const rf = {
   tool: 'erase', brush: 30, view: { s: 1, x: 0, y: 0 }, base: { w: 0, h: 0 },
   overlay: null, stroke: null, box: null, pointers: new Map(), gesture: null,
+  maskColor: loadMaskColor(), brushColor: loadBrushColor(),
 };
+
+function brushColor() {
+  if (rf.brushColor) return rf.brushColor;
+  return maskIsLight(rf.maskColor) ? '#ff3b30' : '#ffffff';
+}
+
+function syncBrushColorUI() {
+  const picker = $('rfBrushColor');
+  if (!picker) return;
+  const color = brushColor();
+  picker.value = color;
+  const swatch = picker.closest('.brush-color');
+  if (swatch) swatch.style.setProperty('--brush', color);
+  const auto = $('rfBrushAuto');
+  if (auto) {
+    const on = !rf.brushColor;
+    auto.classList.toggle('on', on);
+    auto.setAttribute('aria-pressed', String(on));
+  }
+}
+
+function syncMaskColorUI() {
+  const box = $('rfColors');
+  if (!box) return;
+  const buttons = [...box.querySelectorAll('button[data-color]')];
+  const picked = buttons.find((b) => b.dataset.color === rf.maskColor);
+  for (const b of buttons) {
+    const on = b === picked;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  }
+  const custom = box.querySelector('.swatch.custom');
+  if (custom) custom.classList.toggle('on', !picked);
+  const picker = $('rfMaskColor');
+  if (picker) picker.value = rf.maskColor;
+}
+
+function setMaskColor(color) {
+  rf.maskColor = maskColorHex(color) || MASK_COLOR_DEFAULT;
+  try { localStorage.setItem(MASK_COLOR_KEY, rf.maskColor); } catch {}
+  syncMaskColorUI();
+  syncBrushColorUI();
+  rfBuildOverlay();
+  rfDraw();
+}
 
 function rfBuildOverlay() {
   const src = state.finalAlpha;
   if (!src || src.length !== state.rawW * state.rawH) { rf.overlay = null; return; }
   const overlay = document.createElement('canvas'); overlay.width = state.rawW; overlay.height = state.rawH;
   const image = new ImageData(overlay.width, overlay.height);
-  // 识别目标保持完整；其它部分以深色半透明蒙版呈现，一眼看出漏了哪里
-  for (let i = 0, p = 3; i < src.length; i++, p += 4) image.data[p] = Math.round((255 - src[i]) * .72);
+  const [r, g, b] = maskColorRgb(rf.maskColor);
+  // 识别目标保持完整；其它部分以选定的半透明颜色呈现，一眼看出漏了哪里
+  for (let i = 0, p = 3; i < src.length; i++, p += 4) {
+    image.data[p - 3] = r; image.data[p - 2] = g; image.data[p - 1] = b;
+    image.data[p] = Math.round((255 - src[i]) * .72);
+  }
   overlay.getContext('2d').putImageData(image, 0, 0);
   rf.overlay = overlay;
 }
@@ -884,8 +977,8 @@ function rfDraw() {
   if (rf.overlay) ctx.drawImage(rf.overlay, 0, 0);
   if (rf.stroke) {
     ctx.save();
-    ctx.globalAlpha = rf.tool === 'erase' ? .7 : .55;
-    ctx.strokeStyle = ctx.fillStyle = rf.tool === 'erase' ? '#000' : '#fff';
+    ctx.globalAlpha = .65;
+    ctx.strokeStyle = ctx.fillStyle = brushColor();
     ctx.lineCap = ctx.lineJoin = 'round'; ctx.lineWidth = rf.stroke.width;
     const pts = rf.stroke.pts;
     ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
@@ -920,8 +1013,8 @@ function rfApplyView() {
 }
 
 const RF_TIPS = {
-  erase: '把手指划过多余的部分，亮的部分会被擦掉',
-  keep: '把手指划过缺失的部分，暗的部分会被补回',
+  erase: '把手指划过多余的部分，没有遮罩颜色的部分会被擦掉',
+  keep: '把手指划过缺失的部分，有遮罩颜色的部分会被补回',
   box: '在角色周围拖出一个框，AI 会在框里再找一遍',
 };
 
@@ -933,6 +1026,7 @@ function rfSetTool(tool) {
   $('rfTip').textContent = RF_TIPS[tool];
   $('rfBrushLabel').textContent = tool === 'box' ? '（框选不需要笔刷）' : '笔刷大小';
   $('rfBrush').disabled = tool === 'box';
+  syncBrushColorUI();
   rfDraw();
 }
 
@@ -950,12 +1044,32 @@ function openRefine(tool = 'erase') {
   rf.view = { s: 1, x: 0, y: 0 };
   rfApplyView();
   $('rfErode').value = state.erode; $('rfErodeVal').textContent = state.erode + 'px'; paintRange($('rfErode'));
+  syncMaskColorUI();
   rfBuildOverlay();
   rfSetTool(tool);
   $('rfUndo').disabled = !state.maskOps.length;
 }
 
 $('rfTools').addEventListener('click', (e) => { const b = e.target.closest('button[data-tool]'); if (b) rfSetTool(b.dataset.tool); });
+$('rfColors').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-color]');
+  if (b) setMaskColor(b.dataset.color);
+});
+$('rfMaskColor').addEventListener('input', (e) => setMaskColor(e.target.value));
+$('rfBrushColor').addEventListener('input', (e) => {
+  const color = maskColorHex(e.target.value);
+  if (!color) return;
+  rf.brushColor = color;
+  try { localStorage.setItem(BRUSH_COLOR_KEY, color); } catch {}
+  syncBrushColorUI();
+  rfDraw();
+});
+$('rfBrushAuto').addEventListener('click', () => {
+  rf.brushColor = null;
+  try { localStorage.removeItem(BRUSH_COLOR_KEY); } catch {}
+  syncBrushColorUI();
+  rfDraw();
+});
 $('rfBrush').addEventListener('input', (e) => { rf.brush = Number(e.target.value); });
 $('rfUndo').addEventListener('click', undoMaskOp);
 $('rfDone').addEventListener('click', () => $('refineDialog').close());
@@ -1031,7 +1145,7 @@ $('refineDialog').addEventListener('close', () => { rf.stroke = null; rf.box = n
       if (rf.tool === 'erase') {
         const idx = selectedIndicesInStroke(stroke);
         if (idx.length) pushMaskOp({ type: 'erase', idx });
-        else $('rfTip').textContent = '这一笔没有碰到角色。亮的部分才会被擦掉';
+        else $('rfTip').textContent = '这一笔没有碰到角色。没有遮罩颜色的部分才会被擦掉';
       } else {
         pushMaskOp({ type: 'keep', stroke });
       }
