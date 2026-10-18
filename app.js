@@ -1548,11 +1548,14 @@ function makeCompareCanvas(maxWidth, layout) {
       ctx.fillText(place, Math.round(W * .06), y + Math.round(W * .025), Math.round(W * .88));
     }
   } else if (layout === 'leftright') {
-    const H = Math.max(...panels.map((p) => p.h));
-    out.width = W * panels.length + gap * (panels.length - 1);
+    // 左右并排按「等高」缩放：动画常是 16:9、实景常是竖拍 3:4，等宽会让矮的那张下面留一大块黑。
+    const H = Math.round(gh * (W / gw));
+    const ws = panels.map((p) => Math.round(p.cv.width * (H / p.cv.height)));
+    out.width = ws.reduce((s, w) => s + w, 0) + gap * (panels.length - 1);
     out.height = H;
     ctx.fillStyle = '#10130c'; ctx.fillRect(0, 0, out.width, out.height);
-    panels.forEach((p, i) => ctx.drawImage(p.cv, i * (W + gap), 0, W, p.h));
+    let x = 0;
+    panels.forEach((p, i) => { ctx.drawImage(p.cv, x, 0, ws[i], H); x += ws[i] + gap; });
   } else { // updown / triple 纵向
     out.width = W;
     out.height = panels.reduce((s, p) => s + p.h, 0) + gap * (panels.length - 1);
