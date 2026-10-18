@@ -54,6 +54,9 @@ const state = {
   fromMap: null,
 };
 
+let photoFullCache = { url: '', canvas: null };
+let animeLabCache = { anime: null, lab: null, sky: null };
+
 const $ = (id) => document.getElementById(id);
 const HINT_KEY = 'seichi-hint-compare-v1';
 const hasFlag = (k) => { try { return !!localStorage.getItem(k); } catch { return false; } };
@@ -67,6 +70,26 @@ function paintRange(el) {
 }
 const paintRanges = () => document.querySelectorAll('input[type=range]').forEach(paintRange);
 document.addEventListener('input', (e) => { if (e.target.type === 'range') paintRange(e.target); });
+
+function bindRangeNumber(rangeId, numberId) {
+  const range = $(rangeId), number = $(numberId);
+  if (!range || !number) return;
+  const commit = () => {
+    const raw = number.value.trim();
+    let value = raw === '' ? Number(range.value) : Number(raw);
+    if (!Number.isFinite(value)) value = Number(range.value);
+    value = clamp(Math.round(value), Number(range.min), Number(range.max));
+    number.value = value;
+    if (Number(range.value) === value) { paintRange(range); return; }
+    range.value = value;
+    range.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  number.addEventListener('change', commit);
+  number.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); number.blur(); }
+  });
+  range.addEventListener('input', () => { number.value = range.value; });
+}
 
 // 把浏览器/ORT 的英文报错翻成人话：用户能据此决定「换个网络」还是「换张图」
 function friendlyError(e) {
@@ -179,7 +202,16 @@ function getGradeCache() {
   const ignoreSub = SUBTITLE_BAND;
   const photoOpts = { cov: true };
   const animeOpts = { cov: true, ignoreBottomRatio: ignoreSub };
-  const photoLab = imageDataToLab(state.photo.imgData), animeLab = imageDataToLab(state.anime.imgData);
+  const photoLab = imageDataToLab(state.photo.imgData);
+  let animeLab, animeSky;
+  if (animeLabCache.anime === state.anime) {
+    animeLab = animeLabCache.lab;
+    animeSky = animeLabCache.sky;
+  } else {
+    animeLab = imageDataToLab(state.anime.imgData);
+    animeSky = skyMask(state.anime.imgData, { ignoreBottomRatio: ignoreSub });
+    animeLabCache = { anime: state.anime, lab: animeLab, sky: animeSky };
+  }
   const cache = {
     anime: state.anime, photo: state.photo,
     photoLab, animeLab,
@@ -189,7 +221,7 @@ function getGradeCache() {
       map: makeLumaCdfMap(state.photo.imgData, state.anime.imgData, { ignoreBottomRatio: ignoreSub, srcLabData: photoLab, tgtLabData: animeLab }),
     },
     photoSky: skyMask(state.photo.imgData),
-    animeSky: skyMask(state.anime.imgData, { ignoreBottomRatio: ignoreSub }),
+    animeSky,
   };
   if (cache.photoSky.valid && cache.animeSky.valid) {
     const ps = cache.photoSky.weight, as = cache.animeSky.weight;
@@ -354,6 +386,7 @@ async function handleAnimeData(data) {
 
 async function handlePhotoData(data) {
   if (state.photo?.srcUrl?.startsWith('blob:')) URL.revokeObjectURL(state.photo.srcUrl);
+  photoFullCache = { url: '', canvas: null };
   state.photo = {
     imgData: data.imgData, width: data.width, height: data.height, srcUrl: data.url, align: null,
     originalWidth: data.originalWidth || data.width, originalHeight: data.originalHeight || data.height,
@@ -487,7 +520,8 @@ async function loadFromQuery() {
 // ---------- 调色控件 ----------
 const GRADE_LABELS = { strength: 'strengthVal', satBoost: 'satBoostVal', bloom: 'bloomVal' };
 for (const [id, label] of Object.entries(GRADE_LABELS)) {
-  $(id).addEventListener('input', (e) => { $(label).textContent = e.target.value + '%'; scheduleRecompute(); });
+  $(id).addEventListener('input', scheduleRecompute);
+  bindRangeNumber(id, label);
 }
 $('mode').addEventListener('change', recompute);
 $('skyRegion').addEventListener('change', recompute);
@@ -583,11 +617,12 @@ function compositeCharacter(canvas, record = true) {
 function setCharScale(value) {
   const v = clamp(Math.round(Number(value) || 100), 20, 300);
   $('charScale').value = v;
+  $('charScaleVal').value = v;
   paintRange($('charScale'));
-  $('charScaleVal').textContent = v + '%';
   redrawComposite();
 }
 $('charScale').addEventListener('input', (e) => setCharScale(e.target.value));
+bindRangeNumber('charScale', 'charScaleVal');
 
 // 还原：回到抠图时自动给出的大小（100% = 与动画同比例）和动画原位
 $('btnCharReset').addEventListener('click', () => {
@@ -623,7 +658,7 @@ function clearCharacter() {
   state.charBase = null; state.charDraw = null; state.charPos = { cx: 0.5, cy: 0.62 };
   invalidateHarmonize();
   setCharSeg(null);
-  $('charScale').value = 100; $('charScaleVal').textContent = '100%'; paintRange($('charScale'));
+  $('charScale').value = 100; $('charScaleVal').value = 100; paintRange($('charScale'));
   updateCharUI({});
   redrawComposite();
 }
@@ -1210,6 +1245,9 @@ async function runRegion(box) {
 const alignState = {
   active: false,
   bitmap: null,          // 原始照片全画幅的处理分辨率副本（canvas）
+  source: null,          // 本次对齐会话缓存的原始图片，避免完成/恢复时重复解码
+  sourceUrl: '',
+  busy: false,
   bw: 0, bh: 0,          // bitmap 尺寸
   crop: { cx: 0.5, cy: 0.5, scale: 1 }, // scale = 裁剪宽 / 照片宽
   maxScale: 1,
@@ -1245,9 +1283,15 @@ function drawAlignPreview() {
 // 把原始照片（可选：按归一化裁剪框）按 MAX_DIM 缩成 canvas。
 // 对齐/裁剪/还原都从原图重取，可反复调整、不叠加损耗
 async function loadPhotoBitmap(norm = null) {
-  const img = new Image();
-  img.src = state.photo.srcUrl;
-  await imageReady(img);
+  if (!norm && photoFullCache.url === state.photo.srcUrl && photoFullCache.canvas) return photoFullCache.canvas;
+  if (!alignState.source || alignState.sourceUrl !== state.photo.srcUrl) {
+    const img = new Image();
+    img.src = state.photo.srcUrl;
+    await imageReady(img);
+    alignState.source = img;
+    alignState.sourceUrl = state.photo.srcUrl;
+  }
+  const img = alignState.source;
   const nw = img.naturalWidth, nh = img.naturalHeight;
   const sx = norm ? norm.x * nw : 0, sy = norm ? norm.y * nh : 0;
   const sw = norm ? norm.w * nw : nw, sh = norm ? norm.h * nh : nh;
@@ -1255,6 +1299,7 @@ async function loadPhotoBitmap(norm = null) {
   const c = document.createElement('canvas');
   c.width = Math.round(sw * sc); c.height = Math.round(sh * sc);
   c.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  if (!norm) photoFullCache = { url: state.photo.srcUrl, canvas: c };
   return c;
 }
 
@@ -1291,6 +1336,8 @@ function exitAlignMode(redraw = true) {
   if (!alignState.active) return;
   alignState.active = false;
   alignState.bitmap = null;
+  alignState.source = null;
+  alignState.sourceUrl = '';
   $('compare').classList.remove('align-on');
   $('alignGhost').hidden = true;
   updateUI();
@@ -1308,7 +1355,8 @@ async function applyAlignCrop() {
 
 // 恢复整幅照片
 async function resetAlignCrop() {
-  await replacePhotoPixels(await loadPhotoBitmap(), null);
+  if (!alignState.bitmap) return;
+  await replacePhotoPixels(alignState.bitmap, null);
   setStatus('已恢复整幅照片');
 }
 
@@ -1318,16 +1366,29 @@ async function replacePhotoPixels(canvas, align) {
   state.photo.align = align;
   state.gradeCache = null;
   invalidateHarmonize();
-  exitAlignMode(false);
-  updateUI();
+  if (alignState.active) exitAlignMode(false); else updateUI();
+  setStatus('正在重新调色…', 0);
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   recompute();
 }
 
 // 对齐要从原图重取像素，可能失败（原图读不出、手机内存不够）：必须给出提示，别让常驻状态条卡在「应用构图…」
+function setAlignBusy(on) {
+  for (const id of ['btnAlign', 'btnAlignApply', 'btnAlignCancel', 'btnAlignReset']) {
+    const el = $(id);
+    if (el) el.disabled = on;
+  }
+}
 const guardAlign = (fn) => async () => {
+  if (alignState.busy) return;
+  alignState.busy = true;
+  setAlignBusy(true);
   try { await fn(); } catch (e) {
     console.error(e); rememberError('align', e);
     setStatus('构图失败：' + friendlyError(e), 8000);
+  } finally {
+    alignState.busy = false;
+    setAlignBusy(false);
   }
 };
 $('btnAlign').addEventListener('click', guardAlign(enterAlignMode));
@@ -1952,7 +2013,7 @@ function applySettings(saved) {
     if ($(id).type === 'checkbox') $(id).checked = Boolean(saved.values[id]);
     else $(id).value = String(saved.values[id]);
   }
-  for (const [id, label] of Object.entries(GRADE_LABELS)) $(label).textContent = $(id).value + '%';
+  for (const [id, label] of Object.entries(GRADE_LABELS)) $(label).value = $(id).value;
   paintRanges();
   if (state.anime && state.photo) recompute();
 }
