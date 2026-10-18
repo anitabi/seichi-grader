@@ -701,29 +701,19 @@ function applyCharSelection(resetPos) {
 function applyRefine(resetPos) {
   if (!state.rawAlpha || !state.anime) return;
   const w = state.rawW, h = state.rawH;
-  const clean = cleanupAlpha(state.rawAlpha, w, h, { thr: CUTOUT_THR, erode: state.erode, featherR: 2, filter: true, close: true });
-  // 手工修补层：补回区域也走边缘收紧，擦除最后覆盖
-  const ov = state.opsOverlay?.length === clean.length ? state.opsOverlay : null;
-  if (ov) {
-    let keep = null;
-    for (let i = 0; i < ov.length; i++) {
-      if (ov[i] === 1) {
-        if (!keep) keep = new Uint8ClampedArray(clean.length);
-        keep[i] = 255;
-      }
-    }
-    if (keep) {
-      const keepClean = state.erode > 0
-        ? cleanupAlpha(keep, w, h, { thr: 110, erode: state.erode, featherR: 0, filter: false, close: false })
-        : keep;
-      for (let i = 0; i < clean.length; i++) {
-        if (keepClean[i] > clean[i]) clean[i] = keepClean[i];
-      }
-    }
-    for (let i = 0; i < clean.length; i++) {
-      if (ov[i] === 2) clean[i] = 0;
-    }
+  // 手工修补层（补回/擦除的时间序重放结果）：补回也走边缘收紧，擦除最后覆盖
+  const ov = state.opsOverlay?.length === w * h ? state.opsOverlay : null;
+  let clean;
+  if (ov?.includes(1)) {
+    // 补回区域必须先和角色合成一块再收紧。分别收紧再拼起来，接缝两侧各被吃掉一圈，
+    // 补回笔刷只是碰到角色边缘时会收出一道缺口
+    const base = cleanupAlpha(state.rawAlpha, w, h, { thr: CUTOUT_THR, featherR: 0, filter: true, close: true });
+    for (let i = 0; i < base.length; i++) if (ov[i] === 1) base[i] = 255;
+    clean = cleanupAlpha(base, w, h, { erode: state.erode, featherR: 2, filter: false, close: false });
+  } else {
+    clean = cleanupAlpha(state.rawAlpha, w, h, { thr: CUTOUT_THR, erode: state.erode, featherR: 2, filter: true, close: true });
   }
+  if (ov) for (let i = 0; i < clean.length; i++) if (ov[i] === 2) clean[i] = 0;
   state.finalAlpha = clean;
   const { bbox, coverage } = alphaBBox(clean, w, h);
   state.cutout = bbox ? cutoutCanvas(state.anime.imgData, { alpha: clean, bbox }) : null;
