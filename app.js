@@ -285,10 +285,11 @@ function animeCover(w, h) {
 
 // 滑块左侧的对照层：原图或动画截图（点左上角标签切换）
 function drawLeftLayer() {
-  const g = $('canvasGraded'), o = $('canvasOrig');
+  const o = $('canvasOrig');
   if (state.left === 'anime') {
-    o.width = g.width; o.height = g.height;
-    o.getContext('2d').drawImage(animeCover(g.width, g.height), 0, 0);
+    const a = state.anime.canvas;
+    o.width = a.width; o.height = a.height;
+    o.getContext('2d').drawImage(a, 0, 0);
   } else {
     drawToCanvas(o, state.photo.imgData);
   }
@@ -306,11 +307,16 @@ function syncCanvasSize() {
   const box = $('compare'), g = $('canvasGraded');
   const cw = box.clientWidth, ch = box.clientHeight, iw = g.width, ih = g.height;
   if (!cw || !ch || !iw || !ih) return;
-  const scale = Math.min(cw / iw, ch / ih);
-  const w = iw * scale, h = ih * scale;
-  for (const c of [g, $('canvasOrig'), $('alignGhost')]) {
-    c.style.width = w + 'px';
-    c.style.height = h + 'px';
+  const fit = (w, h) => {
+    if (!w || !h) return null;
+    const scale = Math.min(cw / w, ch / h);
+    return [w * scale, h * scale];
+  };
+  const main = fit(iw, ih);
+  const left = $('canvasOrig'), leftSize = fit(left.width, left.height) || main;
+  for (const [c, size] of [[g, main], [left, leftSize], [$('alignGhost'), main]]) {
+    c.style.width = size[0] + 'px';
+    c.style.height = size[1] + 'px';
   }
 }
 new ResizeObserver(syncCanvasSize).observe($('compare'));
